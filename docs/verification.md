@@ -147,6 +147,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 工具链 | MSVC 19.51.36260（VS 18 Community，MSVC 14.51 工具集）· CMake 3.31.3 · Ninja 1.12.1 |
 | 构建 | `tools\build.cmd Release`（`/MT`、`/W4 /WX`、`/guard:cf`），产物 `out\x64\{apkthumb.dll, thumbtest.exe}` |
 | 样本 | `tests\fixtures\generated\` 4 个 aapt2 真实构建的 APK（PNG/WebP/自适应/无图标）+ `tests\fixtures\generated\bad\` 8 个坏包 + 3 个真实包（aida64 8.2 MB、qwxds 1.1 MB、wwlocation 0.3 MB） |
+| 样本可复现性 | `python tests\gen_fixtures.py` 全程可复现：两次运行（不同 cwd）产物逐字节一致；脚本自带 141 条断言，任一条不满足即退出码 1。`aapt2 compile` 必须带 `--no-crunch`（否则 aapt2 会重编码 PNG，图标字节不再等于源文件），WebP 必须 `-lossless 1 -pix_fmt bgra`（默认 yuv420 会把 `#00FFFF` 舍入成 `#01FFFF`，颜色探针就失效了）。`generated/` 与 `real/` 都不入库 |
 | 磁盘 | 系统盘 NVMe（`C:`），工作目录 `D:`（同一物理盘） |
 
 ### V2/V3 · 耗时（`thumbtest`，同进程批量）
