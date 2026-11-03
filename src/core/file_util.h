@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "core/common.h"
+
 namespace apksx {
 
 struct FileStamp {
@@ -19,6 +21,8 @@ bool GetFileStamp(const std::wstring& path, FileStamp* out);
 // SHA-1 / SHA-256 十六进制（小写）
 bool Sha1Hex(const void* data, size_t size, std::wstring* hex);
 bool Sha256Hex(const void* data, size_t size, std::wstring* hex);
+// 流式计算大文件的 SHA-256（不把整包读进内存）
+bool Sha256FileHex(const std::wstring& path, std::wstring* hex, Error* err);
 
 // %LOCALAPPDATA%\apk-shell-ext（按需创建，末尾不带反斜杠）
 bool GetDataDir(std::wstring* out);

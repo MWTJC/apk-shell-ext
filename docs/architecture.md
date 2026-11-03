@@ -94,7 +94,8 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 | 并发 | 每次调用独立进程；不共享状态；缓存只写文件（原子 rename） |
 | 安全 | 只读打开源文件（`FILE_SHARE_READ|WRITE|DELETE`）；不解压到临时目录；限额见 [formats.md](formats.md) §4 |
 
-**JSON schema v1（草案，M2 冻结）**
+**JSON schema v1（M2 实施中：已实现 `file` / `app` / `icon` / `components` / `permissions` / `diagnostics`；
+`signature` / `features` / `splits` 待补，字段只增不改）**
 
 ```json
 {

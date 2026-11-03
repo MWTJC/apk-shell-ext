@@ -56,6 +56,7 @@ add_library(apksx_core STATIC
   src/core/axml.cpp
   src/core/arsc.cpp
   src/core/apk_icon.cpp
+  src/core/apk_info.cpp
   src/core/wic_image.cpp
   src/core/thumb_cache.cpp
 )
@@ -82,6 +83,13 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
+# apkinfo.exe —— 全量解析 worker（ADR-0003）。无 UI，stdout 出 JSON。
+# ---------------------------------------------------------------------------
+add_executable(apkinfo src/worker/apkinfo.cpp)
+target_link_libraries(apkinfo PRIVATE apksx_core)
+set_target_properties(apkinfo PROPERTIES OUTPUT_NAME "apkinfo")
+
+# ---------------------------------------------------------------------------
 # 测试工具：thumbtest.exe（直接驱动 provider、批量计时、坏样本回归）
 # ---------------------------------------------------------------------------
 add_executable(thumbtest tests/thumbtest.cpp)
@@ -89,4 +97,4 @@ target_link_libraries(thumbtest PRIVATE apksx_core shell32 ole32 windowscodecs s
 set_target_properties(thumbtest PROPERTIES OUTPUT_NAME "thumbtest")
 
 # 安装部署（M5 会换成安装器；此处供 register.ps1 复制产物）
-install(TARGETS apkthumb thumbtest RUNTIME DESTINATION . LIBRARY DESTINATION .)
+install(TARGETS apkthumb thumbtest apkinfo RUNTIME DESTINATION . LIBRARY DESTINATION .)

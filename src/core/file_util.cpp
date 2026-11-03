@@ -87,6 +87,69 @@ bool Sha256Hex(const void* data, size_t size, std::wstring* hex) {
   return HashHex(BCRYPT_SHA256_ALGORITHM, 32, data, size, hex);
 }
 
+bool Sha256FileHex(const std::wstring& path, std::wstring* hex, Error* err) {
+  if (hex == nullptr) return false;
+
+  HANDLE file = ::CreateFileW(path.c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+                              nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    if (err) err->set(L"无法打开文件计算哈希");
+    return false;
+  }
+
+  BCRYPT_ALG_HANDLE alg = nullptr;
+  BCRYPT_HASH_HANDLE hash = nullptr;
+  bool ok = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0;
+  if (ok) {
+    DWORD object_size = 0;
+    DWORD written = 0;
+    ok = BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&object_size),
+                           sizeof(object_size), &written, 0) >= 0 &&
+         object_size > 0;
+    if (ok) {
+      std::vector<uint8_t> object(object_size);
+      ok = BCryptCreateHash(alg, &hash, object.data(), object_size, nullptr, 0, 0) >= 0;
+      if (ok) {
+        std::vector<uint8_t> buffer(1u << 20);
+        for (;;) {
+          DWORD read = 0;
+          if (!::ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr)) {
+            ok = false;
+            break;
+          }
+          if (read == 0) break;
+          if (BCryptHashData(hash, buffer.data(), read, 0) < 0) {
+            ok = false;
+            break;
+          }
+        }
+        uint8_t digest[32] = {};
+        if (ok) {
+          ok = BCryptFinishHash(hash, digest, sizeof(digest), 0) >= 0;
+          if (ok) {
+            static const wchar_t kDigits[] = L"0123456789abcdef";
+            hex->clear();
+            hex->reserve(64);
+            for (uint8_t b : digest) {
+              hex->push_back(kDigits[b >> 4]);
+              hex->push_back(kDigits[b & 0xF]);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (hash != nullptr) BCryptDestroyHash(hash);
+  if (alg != nullptr) BCryptCloseAlgorithmProvider(alg, 0);
+  ::CloseHandle(file);
+
+  if (!ok && err) err->set(L"计算 SHA-256 失败");
+  return ok;
+}
+
 bool GetDataDir(std::wstring* out) {
   if (out == nullptr) return false;
   wchar_t buf[MAX_PATH * 2] = {};

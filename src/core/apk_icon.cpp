@@ -96,9 +96,12 @@ const ZipEntry* FindEntryLoose(const ZipReader& zip, std::string_view path) {
   return nullptr;
 }
 
-bool ParseManifestBytes(const std::vector<uint8_t>& bytes, ManifestInfo* out, Error* err) {
-  std::vector<AxmlElement> elements;
-  if (!ParseAxml(bytes, &elements, err)) return false;
+}  // namespace
+
+bool ParseManifestElements(const std::vector<AxmlElement>& elements, ManifestInfo* out,
+                           Error* err) {
+  if (out == nullptr) return false;
+  *out = ManifestInfo();
 
   const AxmlElement* application = nullptr;
   for (const AxmlElement& el : elements) {
@@ -133,6 +136,14 @@ bool ParseManifestBytes(const std::vector<uint8_t>& bytes, ManifestInfo* out, Er
     }
   }
   return true;
+}
+
+namespace {
+
+bool ParseManifestBytes(const std::vector<uint8_t>& bytes, ManifestInfo* out, Error* err) {
+  std::vector<AxmlElement> elements;
+  if (!ParseAxml(bytes, &elements, err)) return false;
+  return ParseManifestElements(elements, out, err);
 }
 
 }  // namespace

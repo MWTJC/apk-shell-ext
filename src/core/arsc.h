@@ -28,10 +28,21 @@ struct ArscCandidate {
   uint32_t entry_index = 0;
   uint16_t density = kDensityDefault;
   uint16_t sdk_version = 0;
+  // 语言/国家（两个字节的 pack，空串表示默认配置）
+  std::string language;
+  std::string country;
   uint8_t value_type = 0;
   uint32_t value_data = 0;      // TYPE_STRING 时是全局字符串池下标
   std::string value_string;     // 解析出的字符串（路径/名字）
   bool is_bag = false;          // 复杂条目（bag/map），M1 不用
+};
+
+// 一个 ResTable_config 的摘要（M2 的"支持的语言/密度"用）
+struct ArscConfig {
+  uint16_t density = kDensityDefault;
+  uint16_t sdk_version = 0;
+  std::string language;
+  std::string country;
 };
 
 struct ArscPackageInfo {
@@ -45,6 +56,9 @@ class ArscTable {
 
   // 收集某个资源 ID 的全部候选（跨 density/sdk 配置）
   void CollectCandidates(uint32_t res_id, std::vector<ArscCandidate>* out) const;
+
+  // 遍历所有 type chunk 的配置（用于汇总语言/密度）
+  void CollectConfigs(std::vector<ArscConfig>* out) const;
 
   bool GetGlobalString(uint32_t index, std::string* out) const;
   const std::vector<ArscPackageInfo>& packages() const { return packages_; }

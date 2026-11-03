@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "core/axml.h"
 #include "core/common.h"
 
 namespace apksx {
@@ -56,6 +57,10 @@ bool LocateApkIcon(const std::wstring& file, IconLocation* icon, ManifestInfo* m
 // 已经打开的 ZIP（stream 场景由调用方先 OpenSource）：读清单 + 定位图标
 bool LocateApkIconInZip(const ZipReader& zip, IconLocation* icon, ManifestInfo* manifest,
                         Error* err, const Deadline* deadline);
+
+// 把已经解析出来的 AXML 事件流汇总成清单字段（worker 与 provider 共用）
+bool ParseManifestElements(const std::vector<AxmlElement>& elements, ManifestInfo* manifest,
+                           Error* err);
 
 // 分开的两步：属性页/worker 先要清单，再单独定位图标
 bool ReadManifestFromZip(const ZipReader& zip, ManifestInfo* manifest, Error* err,

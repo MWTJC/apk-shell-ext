@@ -19,7 +19,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
-| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | ⬜ |
+| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON 骨架 + aapt2 交叉校验已过；签名块与 TD-001 未做 |
 | M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | ⬜ |
 | M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |

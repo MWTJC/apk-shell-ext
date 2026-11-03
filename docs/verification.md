@@ -162,6 +162,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 编号 | 日期 | 阶段 | 结论 | 证据（命令/输出摘要） | 未验证 |
 | --- | --- | --- | --- | --- | --- |
 | R-0001 | 2026-11-03 | M0 | 文档基线建立；**未做任何代码验证** | 本套文档 | M1 起全部待测 |
+| R-0003 | 2026-11-03 | M2（部分） | `apkinfo.exe --json` 骨架：7/7 包与 `aapt2 dump badging` 的包名/版本/SDK/ABI/权限/名称完全一致；`--hash=sha256` 与 `certutil` 一致；退出码 0/2/3 均实测 | 见 §11 | `signature`/`features`/`splits` 字段、TD-001（arsc 分段读）、500 MB 级大包 |
 | R-0002 | 2026-11-03 | M1 | APK 缩略图闭环打通：**真实 Explorer 大图标视图已出包内图标**（截图存档）；**V1 零开销通过**（详细信息 0 次 vs 大图标 36 次）；解析与 aapt2 一致；8 个坏包优雅失败 | 见下 §10、§1.1、§V4 | V8（libwebp 样本）、长跑（句柄/负缓存过期）、V1 的 30 s 长捕获 |
 
 ## 10. R-0002 详细记录（M1，2026-11-03）
@@ -303,3 +304,55 @@ thumbcache 复用）：
 3. V1 的"滚动 30 s"用"进入 + 切视图 + 刷新 + 悬停 10 项、捕获 16 s"替代，时长未到 30 s；
    结论方向不变（0 vs 36），但严格按原始判据还需补一次 30 s 的长捕获。
 4. V4 用的是任务管理器口径（`Get-Process PrivateMemorySize64`），没有 VMMap 的 DLL 级私有数据拆分。
+
+## 11. R-0003 记录（M2 部分，2026-11-03）
+
+**交付**：`outdpkinfo.exe`（静态 CRT，285 KB 级 core 复用）+ JSON schema v1 的
+`file` / `app` / `icon` / `components` / `permissions` / `diagnostics` 六组字段。
+
+### 交叉校验（判据：与 aapt2 一致，允许我们多显示）
+
+```
+python testserify_apkinfo.py <apk...>
+```
+
+```
+OK   f_png.apk         com.example.pngicon      1.2.3 (10203)  sdk 26/34  icon=res/mipmap-xxxhdpi-v4/ic_launcher.png 0.46ms
+OK   f_webp.apk        com.example.webpicon     2.0.1 (2001)   sdk 26/34  icon=res/mipmap-xxhdpi-v4/ic_launcher.webp  0.51ms
+OK   f_adaptive.apk    com.example.adaptiveicon 4.1.0 (4001)   sdk 26/34  icon=res/mipmap-xxxhdpi-v4/ic_launcher.png 0.63ms
+OK   f_noicon.apk      com.example.noicon       3.0.0 (3001)   sdk 26/34  icon=None                                   0.57ms
+OK   aida64-1.94.apk   com.finalwire.aida64     1.94 (194)     sdk 17/31  icon=res/mipmap-xxxhdpi-v4/ic_launcher.png 2.50ms
+OK   qwxds-1.6.1.apk   com.rong862.fqywx        1.6.1 (1061)   sdk 28/33  icon=res/xC.webp                            0.77ms
+OK   wwlocation-...    com.example.wwlocation   0.2.0-probe    sdk 28/33  icon=None                                   0.84ms
+7/7 packages matched
+```
+
+比对项：`package`、`versionCode`、`versionName`、`minSdk`、`targetSdk`、`application-label`、
+`native-code`（ABI 集合）、`uses-permission`（集合）。差异表为空。
+
+### 哈希与退出码
+
+```
+apkinfo --json --hash=sha256 aida64-1.94.apk
+  file.sha256 = 7650825e3fad8dceb3667bf5a8e19bf8c996f081b214bb4aa0529f61c79fbc7e
+certutil -hashfile aida64-1.94.apk SHA256
+  7650825e3fad8dceb3667bf5a8e19bf8c996f081b214bb4aa0529f61c79fbc7e      ← 一致
+```
+
+| 样本 | 退出码 | stderr（现在按 UTF-8 输出） |
+| --- | --- | --- |
+| `f_png.apk` | 0 | — |
+| `bad/empty.apk`（0 字节） | 2 | `apkinfo: 文件太小，不是有效 ZIP` |
+| `bad/notzip.apk` | 2 | `apkinfo: 未找到 ZIP 结束记录（不是有效 ZIP）` |
+| `bad/bomb_entries.apk` | 2 | `apkinfo: ZIP 条目数超限（>65535）` |
+| `bad/traversal.apk` | 2 | `apkinfo: AXML 文件太小` |
+| `bad/badicon.apk` | 0 | 元数据正常，`diagnostics.warnings` 里有"图标条目不是可识别的图像数据" |
+| `bad/bigarsc.apk`（64 MB arsc） | 0 | 元数据正常，warning 说明 arsc 被跳过（TD-001） |
+| `--timeout=1` + `APKSX_TEST_DELAY_MS=2500` | 3 | `apkinfo: timeout after 1000 ms`（watchdog 自杀路径实测） |
+
+### 未验证
+
+1. `signature`（v1/v2/v3 方案识别 + 证书摘要）、`features`（uses-feature）、`splits`（APKS 分包）尚未实现。
+2. TD-001 仍未关闭：arsc 依然整读（> 8 MB 跳过并降级），M2 的"分段流式"未开工。
+3. "≤ 50 MB 包 P95 ≤ 300 ms / ≤ 500 MB 包 ≤ 1.5 s"这条时限判据没跑：手头最大样本 8.2 MB（9.8 ms，含 sha256）。
+4. 恶意样本（V8）与长跑（句柄泄漏）仍未做。

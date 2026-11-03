@@ -30,3 +30,6 @@ tests/fixtures/real/
 # python
 __pycache__/
 *.pyc
+
+# build logs
+*.log

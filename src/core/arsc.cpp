@@ -22,6 +22,23 @@ constexpr uint16_t kEntryFlagComplex = 0x0001;
 // orientation 1 + touchscreen 1）
 constexpr size_t kConfigDensityOffset = 14;
 constexpr size_t kConfigSdkVersionOffset = 24;
+constexpr size_t kConfigLanguageOffset = 8;
+constexpr size_t kConfigCountryOffset = 10;
+
+// ResTable_config 的 language/country 是两个 ASCII 字节（0 表示"默认"）
+std::string UnpackLocaleChars(const uint8_t* p) {
+  std::string out;
+  for (int i = 0; i < 2; ++i) {
+    const uint8_t c = p[i];
+    if (c == 0) break;
+    if (c < 0x20 || c > 0x7E) {
+      // 三个字母的语言用高位编码，M2 先按原样跳过
+      return std::string();
+    }
+    out.push_back(static_cast<char>(c));
+  }
+  return out;
+}
 
 class ArscWalker {
  public:
@@ -29,6 +46,8 @@ class ArscWalker {
 
   bool Walk(uint32_t res_id, std::vector<ArscCandidate>* out, StringPool* global_pool,
             std::vector<ArscPackageInfo>* packages, Error* err);
+  // 只收集所有 type chunk 的配置（不解引用任何资源）
+  bool WalkConfigs(std::vector<ArscConfig>* out, Error* err);
 
  private:
   void WalkPackage(const uint8_t* pkg, size_t pkg_size, uint8_t want_pkg, uint8_t want_type,
@@ -58,8 +77,15 @@ void ArscWalker::WalkType(const uint8_t* chunk, size_t chunk_size, uint8_t type_
 
   uint16_t density = kDensityDefault;
   uint16_t sdk = 0;
+  std::string language;
+  std::string country;
   if (h.header_size >= 20 + 4) {
     const uint32_t cfg_size = le32(chunk + 20);
+    if (cfg_size >= kConfigCountryOffset + 2 &&
+        h.header_size >= 20 + kConfigCountryOffset + 2) {
+      language = UnpackLocaleChars(chunk + 20 + kConfigLanguageOffset);
+      country = UnpackLocaleChars(chunk + 20 + kConfigCountryOffset);
+    }
     if (cfg_size >= kConfigDensityOffset + 2 && h.header_size >= 20 + kConfigDensityOffset + 2) {
       density = le16(chunk + 20 + kConfigDensityOffset);
     }
@@ -113,6 +139,8 @@ void ArscWalker::WalkType(const uint8_t* chunk, size_t chunk_size, uint8_t type_
   cand.entry_index = want_entry;
   cand.density = density;
   cand.sdk_version = sdk;
+  cand.language = language;
+  cand.country = country;
 
   if ((entry_flags & kEntryFlagComplex) != 0) {
     cand.is_bag = true;
@@ -203,6 +231,53 @@ bool ArscWalker::Walk(uint32_t res_id, std::vector<ArscCandidate>* out, StringPo
   return true;
 }
 
+bool ArscWalker::WalkConfigs(std::vector<ArscConfig>* out, Error* err) {
+  if (out == nullptr) return false;
+  if (size_ < 12) {
+    if (err) err->set(L"resources.arsc 太小");
+    return false;
+  }
+  const ChunkHeader table = ReadChunkHeader(data_);
+  if (table.type != kResTableType) {
+    if (err) err->set(L"不是 RES_TABLE");
+    return false;
+  }
+  const size_t table_end = (table.size <= size_) ? table.size : size_;
+
+  size_t pos = table.header_size;
+  while (pos + 8 <= table_end) {
+    const uint8_t* p = data_ + pos;
+    const ChunkHeader ch = ReadChunkHeader(p);
+    if (ch.size < 8 || pos + ch.size > table_end) break;
+    if (ch.type == kResTablePackageType && ch.header_size >= 284) {
+      size_t ppos = ch.header_size;
+      while (ppos + 8 <= ch.size) {
+        const uint8_t* sub = p + ppos;
+        const ChunkHeader sh = ReadChunkHeader(sub);
+        if (sh.size < 8 || ppos + sh.size > ch.size) break;
+        if (sh.type == kResTableTypeType && sh.header_size >= 20 + 4) {
+          ArscConfig cfg;
+          const uint32_t cfg_size = le32(sub + 20);
+          if (cfg_size >= kConfigDensityOffset + 2) {
+            cfg.density = le16(sub + 20 + kConfigDensityOffset);
+          }
+          if (cfg_size >= kConfigCountryOffset + 2) {
+            cfg.language = UnpackLocaleChars(sub + 20 + kConfigLanguageOffset);
+            cfg.country = UnpackLocaleChars(sub + 20 + kConfigCountryOffset);
+          }
+          if (cfg_size >= kConfigSdkVersionOffset + 2) {
+            cfg.sdk_version = le16(sub + 20 + kConfigSdkVersionOffset);
+          }
+          out->push_back(std::move(cfg));
+        }
+        ppos += sh.size;
+      }
+    }
+    pos += ch.size;
+  }
+  return true;
+}
+
 }  // namespace
 
 bool ArscTable::Parse(const std::vector<uint8_t>& data, Error* err) {
@@ -230,6 +305,12 @@ void ArscTable::CollectCandidates(uint32_t res_id, std::vector<ArscCandidate>* o
 
 bool ArscTable::GetGlobalString(uint32_t index, std::string* out) const {
   return global_strings_.Get(index, out);
+}
+
+void ArscTable::CollectConfigs(std::vector<ArscConfig>* out) const {
+  if (out == nullptr || !parsed_ || data_.empty()) return;
+  ArscWalker walker(data_.data(), data_.size());
+  walker.WalkConfigs(out, nullptr);
 }
 
 bool ArscTable::HasPackage(uint8_t id) const {
