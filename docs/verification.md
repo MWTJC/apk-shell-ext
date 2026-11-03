@@ -135,7 +135,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 编号 | 日期 | 阶段 | 结论 | 证据（命令/输出摘要） | 未验证 |
 | --- | --- | --- | --- | --- | --- |
 | R-0001 | 2026-11-03 | M0 | 文档基线建立；**未做任何代码验证** | 本套文档 | M1 起全部待测 |
-| R-0002 | 2026-11-03 | M1 | APK 缩略图闭环打通：真实 Explorer 管线（`IShellItemImageFactory` → `dllhost.exe` → `IInitializeWithStream`）能出包内图标；解析正确率与 aapt2 一致；坏包不崩 | 见下 §10 | V1（ProcMon 未安装）、V4（VMMap）、V8、真实 Explorer 窗口目视 |
+| R-0002 | 2026-11-03 | M1 | APK 缩略图闭环打通：**真实 Explorer 大图标视图已出包内图标**（截图存档）；解析正确率与 aapt2 一致；8 个坏包优雅失败 | 见下 §10 | V1（ProcMon 未安装）、V4（VMMap）、V8、长跑（句柄/负缓存过期） |
 
 ## 10. R-0002 详细记录（M1，2026-11-03）
 
@@ -220,21 +220,43 @@ powershell -File tools\register.ps1 -Uninstall
 `.apk\ShellEx` 父键一并移除；备份文件 `%LOCALAPPDATA%\apk-shell-ext\install-backup.json`
 在卸载后删除。
 
+### V-B1 · 真实 Explorer 窗口（大图标视图）
+
+```
+powershell -File tools\capture-explorer.ps1   # UIA 切"大图标"→ 等 4.5 s → 只截该窗口
+```
+证据截图：[docs/evidence/m1-explorer-large-icons.png](evidence/m1-explorer-large-icons.png)
+
+六个文件的表现（同一目录，系统 thumbcache 与本项目缓存均已清空后首次进入）：
+
+| 文件 | 显示 | 结论 |
+| --- | --- | --- |
+| `AIDA64.apk`（真实包） | 红色 "64" 应用图标 | ✅ 走 arsc → `mipmap-xxxhdpi-v4/ic_launcher.png` |
+| `微信多开器.apk`（真实包） | 绿色安卓机器人图标 | ✅ 走 arsc → 混淆名 `res/xC.webp` |
+| `Demo_PNG.apk`（自造，5 档密度不同色） | 洋红色方块 | ✅ 选中 xxxhdpi（640），密度挑选正确 |
+| `Demo_WebP.apk`（自造） | 青色方块 | ✅ WebP 经 WIC 解码 |
+| `Demo_Adaptive.apk`（自造，含 anydpi XML + 光栅回退） | 蓝色方块 | ✅ 命中 xxxhdpi 光栅回退（M1 不合成图层） |
+| `No_Icon.apk`（自造，无 `android:icon`） | 白色纸张图标 | ✅ 按 ADR-0001 回落系统默认 |
+
+**这条同时给"B1 生效"提供了端到端证据**：Explorer 的图标确实是我们的 handler 从包内取出并解码的，
+而不是任何静态资源。
+
 ### 二进制规模（对照 ADR-0004 的"两个 DLL 合计 < 500 KB"）
 
 | 产物 | 大小 |
 | --- | --- |
-| `apkthumb.dll` | 279 KB |
-| `thumbtest.exe`（验收工具，不进交付物） | 379 KB |
+| `apkthumb.dll` | 285 KB（291,840 B） |
+| `thumbtest.exe`（验收工具，不进交付物） | 375 KB |
+
+导入表只有 `ole32 / bcrypt / SHLWAPI / KERNEL32 / GDI32`，无 `vcruntime*/msvcp*`（`/MT` 生效）；
+导出仅 `DllGetClassObject` / `DllCanUnloadNow`；PE 头含 Control Flow Guard（`tools\inspect-deps.cmd`）。
 
 ### 本阶段未验证（不许当作通过）
 
 1. **V1 零开销**：本机未安装 ProcMon，未能做"详细信息视图滚动 30 s → 0 次 `CreateFile`"的正式判据。
    间接证据：注册表里只有 `.apk\ShellEx\{E357FCCD…}` 一个 handler，没有 `IPropertyStore` / 列 / 预览处理器；
-   `thumbtest --file` 的缓存命中路径也不会打开源文件（键来自 `GetFileAttributesEx`）。
-2. **V4 explorer 内存**：需要 VMMap/任务管理器采样，未做。
+   `thumbtest --file` 的缓存命中路径也不会打开源文件（键来自 `GetFileAttributesEx`）；
+   上面那次 Explorer 截图之前，详细信息视图下 6 个文件显示的是系统默认纸张图标（即没有调用我们取图）。
+2. **V4 explorer 内存**：需要 VMMap/任务管理器采样，未做（注意：缩略图在 dllhost，内存应记在 dllhost 而不是 explorer）。
 3. **V8 恶意样本**：未取公开的 libwebp 崩溃样本；只验证了"坏 PNG 数据被 WIC 拒绝"。
-4. **真实 Explorer 窗口目视**：用 `IShellItemImageFactory`（与 Explorer 同一条管线）验证，
-   但没有切到"大图标"视图截图；M1 退出条件里的"人工确认 3 个真实包图标"是通过
-   逐张查看生成的 PNG 完成的。
-5. 句柄泄漏（开关 100 次）与 24 h 负缓存过期策略未做长跑验证。
+4. 句柄泄漏（开关 100 次）与 24 h 负缓存过期策略未做长跑验证。
