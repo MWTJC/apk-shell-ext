@@ -1,0 +1,316 @@
+{
+  "generatedBy": "tests/gen_fixtures.py",
+  "note": "APKs under generated/ are produced by aapt2 from tests/fixtures/src/*; do not edit by hand. 'expectedIconPathAt256' is the entry a 256px request should pick (highest-density real raster; adaptive XML is not a raster and ranks below).",
+  "aapt2": "E:\\PROGRAMS\\Android\\Sdk\\build-tools\\36.0.0\\aapt2.exe",
+  "androidJar": "E:\\PROGRAMS\\Android\\Sdk\\platforms\\android-36\\android.jar",
+  "minSdk": 26,
+  "targetSdk": 34,
+  "densityColorLegend": {
+    "mdpi": "#FF0000",
+    "hdpi": "#00FF00",
+    "xhdpi": "#0000FF",
+    "xxhdpi": "#FFFF00",
+    "xxxhdpi": "#FF00FF"
+  },
+  "expectedIconPathAt256": {
+    "f_png": "res/mipmap-xxxhdpi-v4/ic_launcher.png",
+    "f_webp": "res/mipmap-xxhdpi-v4/ic_launcher.webp",
+    "f_noicon": null,
+    "f_adaptive": "res/mipmap-xxxhdpi-v4/ic_launcher.png"
+  },
+  "fixtures": [
+    {
+      "name": "f_png",
+      "apk": "tests/fixtures/generated/f_png.apk",
+      "package": "com.example.pngicon",
+      "versionCode": 10203,
+      "versionName": "1.2.3",
+      "minSdk": 26,
+      "targetSdk": 34,
+      "labelDefault": "PNG Icon Demo",
+      "labelZhCN": "中文标签示例",
+      "iconResourceName": "mipmap/ic_launcher",
+      "iconResourceId": "0x7f010000",
+      "densities": [
+        {
+          "density": "mdpi",
+          "densityDpi": 160,
+          "pathInApk": "res/mipmap-mdpi-v4/ic_launcher.png",
+          "sizePx": [
+            48,
+            48
+          ],
+          "centerColor": "FF0000FF",
+          "bytes": 122
+        },
+        {
+          "density": "hdpi",
+          "densityDpi": 240,
+          "pathInApk": "res/mipmap-hdpi-v4/ic_launcher.png",
+          "sizePx": [
+            72,
+            72
+          ],
+          "centerColor": "00FF00FF",
+          "bytes": 167
+        },
+        {
+          "density": "xhdpi",
+          "densityDpi": 320,
+          "pathInApk": "res/mipmap-xhdpi-v4/ic_launcher.png",
+          "sizePx": [
+            96,
+            96
+          ],
+          "centerColor": "0000FFFF",
+          "bytes": 212
+        },
+        {
+          "density": "xxhdpi",
+          "densityDpi": 480,
+          "pathInApk": "res/mipmap-xxhdpi-v4/ic_launcher.png",
+          "sizePx": [
+            144,
+            144
+          ],
+          "centerColor": "FFFF00FF",
+          "bytes": 329
+        },
+        {
+          "density": "xxxhdpi",
+          "densityDpi": 640,
+          "pathInApk": "res/mipmap-xxxhdpi-v4/ic_launcher.png",
+          "sizePx": [
+            192,
+            192
+          ],
+          "centerColor": "FF00FFFF",
+          "bytes": 447
+        }
+      ],
+      "expectedIconPathAt256": "res/mipmap-xxxhdpi-v4/ic_launcher.png"
+    },
+    {
+      "name": "f_webp",
+      "apk": "tests/fixtures/generated/f_webp.apk",
+      "package": "com.example.webpicon",
+      "versionCode": 2001,
+      "versionName": "2.0.1",
+      "minSdk": 26,
+      "targetSdk": 34,
+      "labelDefault": "WebP Icon Demo",
+      "labelZhCN": null,
+      "iconResourceName": "mipmap/ic_launcher",
+      "iconResourceId": "0x7f010000",
+      "densities": [
+        {
+          "density": "xxhdpi",
+          "densityDpi": 480,
+          "pathInApk": "res/mipmap-xxhdpi-v4/ic_launcher.webp",
+          "sizePx": [
+            144,
+            144
+          ],
+          "centerColor": "00FFFFFF",
+          "bytes": 42
+        }
+      ],
+      "expectedIconPathAt256": "res/mipmap-xxhdpi-v4/ic_launcher.webp"
+    },
+    {
+      "name": "f_noicon",
+      "apk": "tests/fixtures/generated/f_noicon.apk",
+      "package": "com.example.noicon",
+      "versionCode": 3001,
+      "versionName": "3.0.0",
+      "minSdk": 26,
+      "targetSdk": 34,
+      "labelDefault": "No Icon Demo",
+      "labelZhCN": null,
+      "iconResourceName": null,
+      "iconResourceId": null,
+      "densities": [],
+      "expectedIconPathAt256": null
+    },
+    {
+      "name": "f_adaptive",
+      "apk": "tests/fixtures/generated/f_adaptive.apk",
+      "package": "com.example.adaptiveicon",
+      "versionCode": 4001,
+      "versionName": "4.1.0",
+      "minSdk": 26,
+      "targetSdk": 34,
+      "labelDefault": "Adaptive Icon Demo",
+      "labelZhCN": null,
+      "iconResourceName": "mipmap/ic_launcher",
+      "iconResourceId": "0x7f020000",
+      "densities": [
+        {
+          "density": "xxhdpi",
+          "densityDpi": 480,
+          "pathInApk": "res/mipmap-xxhdpi-v4/ic_launcher.png",
+          "sizePx": [
+            144,
+            144
+          ],
+          "centerColor": "66FF00FF",
+          "bytes": 331
+        },
+        {
+          "density": "xxxhdpi",
+          "densityDpi": 640,
+          "pathInApk": "res/mipmap-xxxhdpi-v4/ic_launcher.png",
+          "sizePx": [
+            192,
+            192
+          ],
+          "centerColor": "0066FFFF",
+          "bytes": 448
+        }
+      ],
+      "expectedIconPathAt256": "res/mipmap-xxxhdpi-v4/ic_launcher.png",
+      "adaptive": {
+        "xml": "res/mipmap-anydpi-v26/ic_launcher.xml",
+        "background": "#FF0066",
+        "foreground": "res/mipmap-xxxhdpi-v4/ic_launcher_fg.png",
+        "foregroundColor": "#FF9900",
+        "foregroundSizePx": [
+          432,
+          432
+        ]
+      }
+    }
+  ],
+  "bad": [
+    {
+      "name": "empty",
+      "file": "tests/fixtures/generated/bad/empty.apk",
+      "bytes": 0,
+      "description": "0-byte file"
+    },
+    {
+      "name": "trunc",
+      "file": "tests/fixtures/generated/bad/trunc.apk",
+      "bytes": 2657,
+      "truncatedFrom": 4429,
+      "description": "f_png.apk cut at 60%"
+    },
+    {
+      "name": "notzip",
+      "file": "tests/fixtures/generated/bad/notzip.apk",
+      "bytes": 4096,
+      "description": "4 KiB deterministic pseudo-random bytes"
+    },
+    {
+      "name": "bomb_entries",
+      "file": "tests/fixtures/generated/bad/bomb_entries.apk",
+      "bytes": 6012286,
+      "entryCount": 70000,
+      "description": "70000 zero-byte entries, stored, ZIP64 EOCD"
+    },
+    {
+      "name": "traversal",
+      "file": "tests/fixtures/generated/bad/traversal.apk",
+      "bytes": 936,
+      "entries": [
+        "../../evil.dll",
+        "res/mipmap-xxxhdpi/ic_launcher.png"
+      ],
+      "description": "traversal name + unreadable (invalid deflate) icon entry"
+    },
+    {
+      "name": "bigarsc",
+      "file": "tests/fixtures/generated/bad/bigarsc.apk",
+      "bytes": 67113009,
+      "arscBytes": 67108864,
+      "description": "f_png.apk with resources.arsc swapped for 64 MiB blob"
+    },
+    {
+      "name": "badicon",
+      "file": "tests/fixtures/generated/bad/badicon.apk",
+      "bytes": 9278,
+      "replacedEntry": "res/mipmap-xxxhdpi-v4/ic_launcher.png",
+      "entryBytes": 4096,
+      "description": "icon entry data replaced by 4 KiB garbage"
+    },
+    {
+      "name": "deflate_bomb",
+      "file": "tests/fixtures/generated/bad/deflate_bomb.apk",
+      "bytes": 305877,
+      "declaredUncompressed": 314572800,
+      "description": "one entry, 300 MiB declared, real high-ratio deflate"
+    }
+  ],
+  "real": [
+    {
+      "name": "aida64-1.94",
+      "apk": "tests/fixtures/real/aida64-1.94.apk",
+      "bytes": 8239215,
+      "package": "com.finalwire.aida64",
+      "versionCode": "194",
+      "versionName": "1.94",
+      "minSdk": "17",
+      "targetSdk": "31",
+      "label": "AIDA64",
+      "declaredIcon": "res/mipmap-anydpi-v26/ic_launcher.xml",
+      "launchableActivity": "com.finalwire.aida64.HHMainActivity",
+      "iconEntries": [
+        "res/mipmap-anydpi-v26/ic_launcher.xml",
+        "res/mipmap-hdpi-v4/ic_background.png",
+        "res/mipmap-hdpi-v4/ic_foreground.png",
+        "res/mipmap-hdpi-v4/ic_launcher.png",
+        "res/mipmap-mdpi-v4/ic_background.png",
+        "res/mipmap-mdpi-v4/ic_foreground.png",
+        "res/mipmap-mdpi-v4/ic_launcher.png",
+        "res/mipmap-xhdpi-v4/ic_background.png",
+        "res/mipmap-xhdpi-v4/ic_foreground.png",
+        "res/mipmap-xhdpi-v4/ic_launcher.png",
+        "res/mipmap-xxhdpi-v4/ic_background.png",
+        "res/mipmap-xxhdpi-v4/ic_foreground.png"
+      ]
+    },
+    {
+      "name": "qwxds-1.6.1",
+      "apk": "tests/fixtures/real/qwxds-1.6.1.apk",
+      "bytes": 1111856,
+      "package": "com.rong862.fqywx",
+      "versionCode": "1061",
+      "versionName": "1.6.1",
+      "minSdk": "28",
+      "targetSdk": "33",
+      "label": "企微小打手",
+      "declaredIcon": "res/uF.xml",
+      "launchableActivity": "com.rong862.fqywx.MainActivity",
+      "iconEntries": [
+        "res/uF.xml",
+        "res/1t.xml",
+        "res/3m.xml",
+        "res/3N.xml",
+        "res/4W.xml",
+        "res/86.xml",
+        "res/AT.xml",
+        "res/C7.xml",
+        "res/CI.xml",
+        "res/Cv.xml",
+        "res/DS.xml",
+        "res/FZ.xml"
+      ],
+      "note": "resource paths are obfuscated/shortened in this APK; manifest icon = res/uF.xml"
+    },
+    {
+      "name": "wwlocation-probe-debug",
+      "apk": "tests/fixtures/real/wwlocation-probe-debug.apk",
+      "bytes": 299871,
+      "package": "com.example.wwlocation",
+      "versionCode": "23",
+      "versionName": "0.2.0-probe",
+      "minSdk": "28",
+      "targetSdk": "33",
+      "label": "WwLocation",
+      "declaredIcon": null,
+      "launchableActivity": "com.example.wwlocation.MainActivity",
+      "iconEntries": [],
+      "note": "no android:icon in manifest (aapt2 badging reports icon='')"
+    }
+  ]
+}

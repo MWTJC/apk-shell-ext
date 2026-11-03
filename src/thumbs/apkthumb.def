@@ -1,0 +1,4 @@
+LIBRARY apkthumb
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE

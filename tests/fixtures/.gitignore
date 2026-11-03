@@ -1,0 +1,7 @@
+# Everything here is produced by tests/gen_fixtures.py or copied from the
+# developer machine -- no binaries in git.
+generated/
+src/*/res/**/*.png
+src/*/res/**/*.webp
+# real-world samples (see the "real" array in MANIFEST.json for provenance)
+real/

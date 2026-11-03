@@ -21,6 +21,12 @@ CMakeUserPresets.json
 
 # generated fixtures (regenerate from scripts)
 tests/fixtures/generated/
+# real-world sample packages: local only, too large for the repo
+tests/fixtures/real/
 
 # local notes
 *.local.md
+
+# python
+__pycache__/
+*.pyc
