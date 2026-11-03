@@ -7,11 +7,13 @@ param(
 # the Chinese UI labels are built from code points.
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
-Add-Type -Namespace Win32 -Name Api -MemberDefinition @'
+if (-not ('Win32.CaptureApi' -as [type])) {
+    Add-Type -Namespace Win32 -Name CaptureApi -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 '@
+}
 
 $u = { param([int[]]$cp) -join ($cp | ForEach-Object { [char]$_ }) }
 $labelView = & $u @(0x89C6, 0x56FE)          # shi tu   = "view"
@@ -21,7 +23,7 @@ $labelLarge = & $u @(0x5927, 0x56FE, 0x6807) # da tu biao = "large icons"
 $proc = Get-Process explorer | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -First 1
 if ($null -eq $proc) { throw "no Explorer window found" }
 $hwnd = $proc.MainWindowHandle
-[void][Win32.Api]::SetForegroundWindow($hwnd)
+[void][Win32.CaptureApi]::SetForegroundWindow($hwnd)
 Start-Sleep -Milliseconds 300
 
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
@@ -69,7 +71,7 @@ try {
 Start-Sleep -Milliseconds 4500   # thumbnails render (first pass may hit dllhost)
 
 $r = New-Object Win32.Api+RECT
-[void][Win32.Api]::GetWindowRect($hwnd, [ref]$r)
+[void][Win32.CaptureApi]::GetWindowRect($hwnd, [ref]$r)
 $w = $r.Right - $r.Left
 $h = $r.Bottom - $r.Top
 if ($w -le 0 -or $h -le 0) { throw "bad window size ${w}x${h}" }

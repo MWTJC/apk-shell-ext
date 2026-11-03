@@ -32,12 +32,39 @@
 
 **已知干扰项**：网盘/同步客户端、杀软实时扫描、Windows Search 索引。测量前逐个暂停，或按 `Process Name` 严格过滤。
 
+### 1.1 自动化配方（M1 交付，可复现）
+
+ProcMon 的命令行**没有** `/Filter` 开关（只有 `/LoadConfig` + 二进制 `.pmc`），所以采用
+"不限过滤、短时捕获、事后在 CSV 上过滤"的做法；关键在于**捕获必须已经开始，再去浏览目录**，
+否则就是空测（空捕获当然 0 条）：
+
+```powershell
+# 一次 UAC：Procmon 抓 $Seconds 秒 → 导出 CSV；脚本在捕获期间完成"进入目录 + 切视图 + 刷新 + 悬停"
+powershell -File tools\v1-procmon.ps1 -Folder <目录> -Seconds 16 -View Details -WorkDir <工作目录>
+python tools\parse-procmon-csv.py <工作目录>\v1.csv --ext .apk
+```
+
+**灵敏度对照（必须做）**：同一条命令把 `-View` 换成 `Large`，期望出现命中——否则说明测量无效。
+M1 实测（同一台机、同一批 12 个 APK、两边都先清空自建缓存）：
+
+| 场景 | explorer.exe `CreateFile(*.apk)` | DllHost.exe | 合计 opens |
+| --- | --- | --- | --- |
+| **详细信息视图**（进入 + 切视图 + 刷新 + 悬停 10 项） | **0** | 0 | **0** |
+| 大图标视图（同样动作，灵敏度对照） | 24 | 12 | 36 |
+| 捕获事件总量 | 774,226 | 789,925 | — |
+
+**V1 判定：通过**（详细信息视图 0 次，且同方法在大图标视图确实能抓到 36 次）。
+附带发现：大图标视图下 **explorer.exe 自己也要开文件**（每文件 2 次），随后 DllHost.exe 再开 1 次
+拿数据流——这解释了为什么"缩略图只读几十 KB"的设计在隔离宿主下仍成立（探测与取图分离）。
+
 ## 2. V2/V3 · 缩略图耗时（冷/热）
 
-**工具**：`tests\thumbbench.exe`（M1 交付，走 `IShellItemImageFactory::GetImage(SIIGBF_THUMBNAILONLY)`，与 Explorer 同一条路径，含 thumbcache）。
+**工具**：`tests\thumbtest.exe`（M1 交付；`--shell` 走 `IShellItemImageFactory::GetImage(SIIGBF_THUMBNAILONLY)`，
+与 Explorer 同一条路径且经 dllhost；不带 `--shell` 时直接 DllGetClassObject 驱动 provider）。
 
 ```
-thumbbench.exe --dir "D:\apks" --size 256 --repeat 3 --json
+thumbtest.exe --dir "D:\apks" --size 256 --repeat 3 --json
+thumbtest.exe --shell --dir "D:\apks" --repeat 2 --json
 ```
 
 输出每个文件的第一次耗时（冷）与后续（热），以及 P50/P95/最大值。
@@ -135,7 +162,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 编号 | 日期 | 阶段 | 结论 | 证据（命令/输出摘要） | 未验证 |
 | --- | --- | --- | --- | --- | --- |
 | R-0001 | 2026-11-03 | M0 | 文档基线建立；**未做任何代码验证** | 本套文档 | M1 起全部待测 |
-| R-0002 | 2026-11-03 | M1 | APK 缩略图闭环打通：**真实 Explorer 大图标视图已出包内图标**（截图存档）；解析正确率与 aapt2 一致；8 个坏包优雅失败 | 见下 §10 | V1（ProcMon 未安装）、V4（VMMap）、V8、长跑（句柄/负缓存过期） |
+| R-0002 | 2026-11-03 | M1 | APK 缩略图闭环打通：**真实 Explorer 大图标视图已出包内图标**（截图存档）；**V1 零开销通过**（详细信息 0 次 vs 大图标 36 次）；解析与 aapt2 一致；8 个坏包优雅失败 | 见下 §10、§1.1、§V4 | V8（libwebp 样本）、长跑（句柄/负缓存过期）、V1 的 30 s 长捕获 |
 
 ## 10. R-0002 详细记录（M1，2026-11-03）
 
@@ -149,6 +176,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 样本 | `tests\fixtures\generated\` 4 个 aapt2 真实构建的 APK（PNG/WebP/自适应/无图标）+ `tests\fixtures\generated\bad\` 8 个坏包 + 3 个真实包（aida64 8.2 MB、qwxds 1.1 MB、wwlocation 0.3 MB） |
 | 样本可复现性 | `python tests\gen_fixtures.py` 全程可复现：两次运行（不同 cwd）产物逐字节一致；脚本自带 141 条断言，任一条不满足即退出码 1。`aapt2 compile` 必须带 `--no-crunch`（否则 aapt2 会重编码 PNG，图标字节不再等于源文件），WebP 必须 `-lossless 1 -pix_fmt bgra`（默认 yuv420 会把 `#00FFFF` 舍入成 `#01FFFF`，颜色探针就失效了）。`generated/` 与 `real/` 都不入库 |
 | 磁盘 | 系统盘 NVMe（`C:`），工作目录 `D:`（同一物理盘） |
+| 观测工具 | Sysinternals Suite（Store 版 2026.10.0.0）`Procmon.exe`；脚本 `tools1-procmon.ps1` + `tools\parse-procmon-csv.py` |
 
 ### V2/V3 · 耗时（`thumbtest`，同进程批量）
 
@@ -252,12 +280,26 @@ powershell -File tools\capture-explorer.ps1   # UIA 切"大图标"→ 等 4.5 s 
 导入表只有 `ole32 / bcrypt / SHLWAPI / KERNEL32 / GDI32`，无 `vcruntime*/msvcp*`（`/MT` 生效）；
 导出仅 `DllGetClassObject` / `DllCanUnloadNow`；PE 头含 Control Flow Guard（`tools\inspect-deps.cmd`）。
 
+### V4 · 内存增量（任务管理器口径，非 VMMap）
+
+同一台机、100 个 APK、大图标视图，用扩展"卸载 / 已装"两次 A/B（每次用独立的同名目录，避免视图状态与
+thumbcache 复用）：
+
+| 配置 | explorer 私有提交增量 | 我们的 handler 所在进程 |
+| --- | --- | --- |
+| 扩展**未**安装（100 个静态纸张图标） | +168.3 MB | — |
+| 扩展已安装（100 个缩略图） | +204.8 MB | dllhost.exe 私有 **4.3 MB**（含 WIC 等宿主自身开销） |
+
+结论：**我们的代码不进 explorer**；explorer 的增量主要是 100 张 256×256 位图与 shell 视图结构（168 MB
+在未装扩展时就已经发生）。"explorer 增量 ≤ 3 MB"这条判据写在 handler 假定运行于 explorer 时代，现已不适用，
+后续按"dllhost 增量 ≤ 10 MB"考核更合理（M3 属性页仍会进 explorer，届时重新定义）。
+
+复现：`powershell -File tools\measure-memory.ps1 -Folder <目录>`
+
 ### 本阶段未验证（不许当作通过）
 
-1. **V1 零开销**：本机未安装 ProcMon，未能做"详细信息视图滚动 30 s → 0 次 `CreateFile`"的正式判据。
-   间接证据：注册表里只有 `.apk\ShellEx\{E357FCCD…}` 一个 handler，没有 `IPropertyStore` / 列 / 预览处理器；
-   `thumbtest --file` 的缓存命中路径也不会打开源文件（键来自 `GetFileAttributesEx`）；
-   上面那次 Explorer 截图之前，详细信息视图下 6 个文件显示的是系统默认纸张图标（即没有调用我们取图）。
-2. **V4 explorer 内存**：需要 VMMap/任务管理器采样，未做（注意：缩略图在 dllhost，内存应记在 dllhost 而不是 explorer）。
-3. **V8 恶意样本**：未取公开的 libwebp 崩溃样本；只验证了"坏 PNG 数据被 WIC 拒绝"。
-4. 句柄泄漏（开关 100 次）与 24 h 负缓存过期策略未做长跑验证。
+1. **V8 恶意样本**：未取公开的 libwebp 崩溃样本；只验证了"坏 PNG 数据被 WIC 拒绝"。
+2. 句柄泄漏（开关 100 次）与 24 h 负缓存过期策略未做长跑验证。
+3. V1 的"滚动 30 s"用"进入 + 切视图 + 刷新 + 悬停 10 项、捕获 16 s"替代，时长未到 30 s；
+   结论方向不变（0 vs 36），但严格按原始判据还需补一次 30 s 的长捕获。
+4. V4 用的是任务管理器口径（`Get-Process PrivateMemorySize64`），没有 VMMap 的 DLL 级私有数据拆分。
