@@ -79,6 +79,7 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 | [docs/formats.md](docs/formats.md) | APK/APKS/XAPK/APKM/AAB/IPA/HAP/APPX 的容器与图标位置矩阵、安全限额 |
 | [docs/roadmap.md](docs/roadmap.md) | **实现阶段 M0–M5**、每阶段交付/验收/退出条件、风险登记 |
 | [docs/verification.md](docs/verification.md) | 把「无感」变成可测判据：ProcMon 配方、耗时与内存预算、记录表（R-0002 = M1 实测） |
+| [docs/m3-property-page.md](docs/m3-property-page.md) | **M3 属性页设计方案**（待评审：布局、自绘、worker 调用、错误态、DPI/深色、验收） |
 | [docs/adr/](docs/adr/README.md) | 架构决策记录（5 条；前四条冻结，0005 由 M1 实测得出） |
 
 ## 当前状态

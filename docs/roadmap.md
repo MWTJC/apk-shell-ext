@@ -20,7 +20,7 @@ flowchart LR
 | M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
 | M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON + aapt2 交叉校验通过；**TD-001 已关闭**；**签名块与 features 已落地**；`splits` 未做 |
-| M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | ⬜ |
+| M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | 🟡 设计方案待评审（[m3-property-page.md](m3-property-page.md)） |
 | M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
 
@@ -185,6 +185,8 @@ flowchart LR
 **退出条件**：schema v1 冻结（之后只增字段）；worker 可被属性页与脚本两类调用方稳定消费；**TD-001 关闭**——ARSC 改为分段流式读取，"整读 ≤ 8 MB"路径删除，且大资源表样本（≥ 32 MB）的缩略图仍满足 V2 判据。
 
 ## M3 · 属性页
+
+**设计方案**：[m3-property-page.md](m3-property-page.md)（2026-11-04，待评审；评审通过后才写代码）
 
 **范围**：`apkprop.dll`，只做「安装包信息」单页。
 
