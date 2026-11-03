@@ -16,7 +16,7 @@
 
 1. 单页「安装包信息」，形态参照 HashTab：顶部标识区 + 4 个字段组 + 底部状态区。
 2. 字段全部来自 `apkinfo.exe --json`（schema v1），页面不自己解析 APK（唯一例外：`GetFileAttributesExW` 取大小/时间，成本 ~0.1 ms）。
-3. 错误态、取消、深色模式、高 DPI、逐行复制。
+3. 错误态、取消、跟随意题的亮暗、高 DPI、逐行复制。
 
 **不做（v1）**
 
@@ -80,7 +80,8 @@
 | A2 `SysListView32` report + ownerdraw | 需要 `SetWindowTheme("DarkMode_Explorer")`，表头/边框仍有白边 | 可 | 现成（多选、Ctrl+C 要自己挂） | 好 | ~400 行 + 主题补丁 |
 | A3 标准 Static + 只读 Edit 拼装 | 每个控件都要 `WM_CTLCOLORSTATIC` 单独处理，滚动要自己做 | 可 | 现成 | 好 | ~350 行但观感最差 |
 
-**推荐 A1**：本页本质是"一张两列表格"，自绘一次投入换来深色/DPI/行高/分组标题全部一致；
+**推荐 A1**（已采用）：本页本质是"一张两列表格"，自绘只负责排版；**颜色一律向宿主/系统要**（见 §7），
+所以自绘不再意味着"自己发明配色"。
 HashTab 也是自绘列表，用户对"属性页里能选中复制"的预期它已经立好了。代价是无障碍弱，记为已知限制。
 **逃生舱**：如果自绘超过 600 行还有毛刺，退回 A2（`LVS_OWNERDRAWFIXED` + 自绘滚动条）。
 
@@ -192,7 +193,7 @@ HKCR\CLSID\{PropCLSID}\InprocServer32             (default) = <install dir>\apkp
 | M3-2 | 解析中关窗 × 20：不崩、不残留 `apkinfo.exe`、句柄回基线 | 脚本 + `Get-Process` |
 | M3-3 | 连续开关 100 次：explorer 句柄/私有提交无单调增长 | `Get-Process explorer` 采样 + 线性回归斜率 |
 | M3-4 | 150% / 200% DPI 不裁切、不重叠 | 手动截图（PNG 入库 `docs/evidence/`） |
-| M3-5 | 深色模式文字对比度 ≥ 4.5:1（次文本 ≥ 3:1） | 取色计算，记录数值 |
+| M3-5 | 页内配色与属性窗口一致（背景/文字取色差值 = 0），次文本对比度 ≥ 3:1 | 截图 + 取色像素比对 |
 | M3-6 | worker 人为 abort：页面显示「解析器异常退出」，explorer 存活 | `APKSX_TEST_ABORT_MS`（新增测试钩子，语义同 `APKSX_TEST_DELAY_MS`） |
 | 新增 1 | 页面字段与 `apkinfo --json` 逐字段一致（3 真实包 + 2 损坏包） | 人工对照表 + 截图 |
 | 新增 2 | 中文/英文系统语言下文案不缺字（v1 只做中文 + 英文两套 .rc） | 切换语言手动看 |
@@ -212,13 +213,13 @@ src/propsheet/
 tests/propsheet_model_test.cpp   直接驱动 page_model（无 GUI），用现有夹具的 JSON 断言
 ```
 
-估时 **2–3 人日**：UI/自绘 1 d、worker_client 0.5 d、错误态 + 深色/DPI 0.5 d、测试与文档 0.5–1 d。
+估时 **2–3 人日**：UI/自绘 1 d、worker_client 0.5 d、错误态 + 亮暗跟随/DPI 0.5 d、测试与文档 0.5–1 d。
 
 ## 12. 待拍板
 
 | # | 问题 | 选项 | 我的建议 |
 | --- | --- | --- | --- |
-| A | 列表实现 | 自绘 / ListView ownerdraw / 标准控件 | **自绘**（深色与 DPI 一致，代价是无障碍弱） |
+| A | 列表实现 | 自绘 / ListView ownerdraw / 标准控件 | **自绘**（只决定排版，颜色问宿主；代价是无障碍弱） |
 | B | SHA-256 | 按需按钮 / 自动算 / 不显示 | **按需按钮**（1.9 GB 包要 1.16 s，自动算会让"冷开 ≤1s"随包大小失效） |
 | C | 是否引入 meta JSON 缓存 | 不引入 / 引入（`%LOCALAPPDATA%\apk-shell-ext\meta\`） | **v1 不引入**：解析只要 10 ms，缓存反而带来"钟表不准"的一致性问题；等 M4 有了慢格式（AAB/IPA）再说 |
 | D | 页面宽度/密度 | 420 DIP 宽 + 只显示有值的行 / 更宽 + 固定行 | **420 DIP + 只显示有值的行** |
@@ -229,7 +230,7 @@ tests/propsheet_model_test.cpp   直接驱动 page_model（无 GUI），用现�
 | --- | --- | --- |
 | P1 | 自绘列表无障碍差（Narrator 读不到） | 记为已知限制；至少给整页 `WM_GETOBJECT` 返回 `ROLE_SYSTEM_PANE` + 文本摘要 |
 | P2 | 150% DPI 下长包名/长证书主题溢出 | 单行省略 + tooltip + 复制全文；DPI 用例覆盖 200% |
-| P3 | explorer 的深色接口在不同 build 上表现不一致 | 只依赖公开的 `AppsUseLightTheme` 注册表值 + 自绘，不调用未公开的 `SetPreferredAppMode` |
+| P3 | explorer 的深色接口在不同 build 上表现不一致 | 不猜：背景/文字直接问宿主（`WM_CTLCOLOR*`），其余用 `GetSysColor`；不调用未公开的 `SetPreferredAppMode` |
 | P4 | 杀软拦截 `CreateProcess` 使冷开变慢/失败 | 错误态明确提示；M5 代码签名后复测 |
 | P5 | 属性页 handler 在 explorer 里崩溃 | 全部入口 `try/catch`；解析在 worker；`/guard:cf` 已有 |
 
@@ -276,7 +277,7 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 2. **`PSM_INITDIALOG` 之后先画骨架**：label 用文件名兜底、组标题为"正在解析…"，避免空窗口。
 3. 错误态的行用"空键"绘制（从左边距开始），不再占键列。
 
-### 实测（本机，深色主题 100% DPI）
+### 实测（本机：系统深色主题、属性窗口浅色、100% DPI —— 页内与窗口一致）
 
 | 场景 | 结果 | 证据 |
 | --- | --- | --- |
@@ -290,7 +291,7 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 ### 已知限制 / 未验证
 
 1. 无障碍：自绘列表对 Narrator 不友好（§13 P1 已登记，v1 接受）。
-2. **150% / 200% DPI 未实测**（当前机器 100%）；浅色主题已截图为证。
+2. **150% / 200% DPI 未实测**（当前机器 100%）；页内跟窗口的一致性已截图为证（系统深色时页内仍是浅色）。
 3. 100 次开关的句柄趋势未做（10 次已做，见 R-0006）；`worker 崩溃` 用标志文件钩子验证通过
    （`%TEMP%pk-shell-ext.test-abort.on` → `ExitProcess(0xC0000005)`）。
 4. 中英文双语只做了中文文案；`.rc` 的 STRINGTABLE 留了 ID，英文在 M5 一起做。

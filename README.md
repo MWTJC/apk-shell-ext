@@ -98,7 +98,8 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 
 **M3 已完成（2026-11-04，记录 [verification.md R-0006](docs/verification.md)）**
 
-`apkprop.dll`：右键属性里的「安装包信息」单页，全自绘（4 组字段 + 展开 + 滚动 + 逐行复制）。
+`apkprop.dll`：右键属性里的「安装包信息」单页，全自绘但**只决定排版**（4 组字段 + 展开 + 滚动 + 逐行复制）；
+底色/文字/字体全部向属性窗口本身与系统色要，所以页内永远和窗口同风格（系统深色时也是浅色）。
 `AddPages` 零 IO，`PSM_INITDIALOG` 之后起线程 → `apkinfo.exe`（挂在带 `KILL_ON_JOB_CLOSE` 的 Job 上）→
 JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJobObject`。
 实测：7.9 MB 包 **140–188 ms** 出全页，1.79 GB 包 **157 ms**，按需 SHA-256 172 ms（1.9 GB 约 1.2 s），
@@ -122,7 +123,7 @@ JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJo
 
 **下一步（建议顺序）**
 
-1. M3 剩余验收：150%/200% DPI、浅色主题、100 次开关的句柄趋势、`worker abort` 文案、卸载 diff。
+1. M3 剩余验收：150%/200% DPI、100 次开关的句柄趋势（worker abort / 卸载 / 亮暗跟随已补测）。
 2. M4a：`.apks/.xapk/.apkm`（外层 ZIP + base.apk），顺带补 schema 的 `splits`。
 3. M2 尾巴：TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
 

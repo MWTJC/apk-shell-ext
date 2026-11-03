@@ -137,7 +137,6 @@ struct PageState : std::enable_shared_from_this<PageState> {
   bool worker_running = false;
   bool hash_running = false;
   bool info_ok = false;
-  bool theme_dark = false;
 
   apksx::PageModel model;
   apksx::PageTheme theme;
@@ -724,7 +723,6 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
         state->hwnd = hwnd;
         state->cancel.store(false);
       }
-      state->theme_dark = apksx::IsDarkModeEnabled();
       (void)apksx::LoadTheme(&state->theme, hwnd);
       CreateTooltip(hwnd, state);
 
@@ -856,18 +854,17 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
       return DLGC_WANTARROWS | DLGC_WANTCHARS;
     }
 
-    case WM_SETTINGCHANGE: {
+    // 亮暗由系统 / 宿主决定：只在这几个"系统外观变了"的消息上重新问一遍宿主，
+    // 不自己读主题开关（用户 2026-11-04 的要求）。
+    case WM_SYSCOLORCHANGE:
+    case WM_THEMECHANGED:
+    case WM_SETTINGCHANGE:
+    case WM_DPICHANGED: {
       if (state == nullptr) break;
-      if (lparam != 0 && std::wstring(reinterpret_cast<const wchar_t*>(lparam)) == L"ImmersiveColorSet") {
-        const bool dark = apksx::IsDarkModeEnabled();
-        if (dark != state->theme_dark) {
-          apksx::DestroyTheme(&state->theme);
-          (void)apksx::LoadTheme(&state->theme, hwnd);
-          state->theme_dark = dark;
-          Relayout(hwnd, state);
-          ::InvalidateRect(hwnd, nullptr, TRUE);
-        }
-      }
+      apksx::DestroyTheme(&state->theme);
+      (void)apksx::LoadTheme(&state->theme, hwnd);
+      Relayout(hwnd, state);
+      ::InvalidateRect(hwnd, nullptr, TRUE);
       break;
     }
 

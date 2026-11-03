@@ -537,7 +537,7 @@ aapt2 会把"隐含特性"同时打成 `uses-feature` 与 `uses-implied-feature`
 | 项 | 值 |
 | --- | --- |
 | OS | Windows 11 `10.0.26300` |
-| 主题 / DPI | 深色（`AppsUseLightTheme=0`）/ 100% |
+| 主题 / DPI | 系统深色（`AppsUseLightTheme=0`）、属性窗口浅色 / 100% |
 | 构建 | Release `/MT /W4 /WX`，`apkprop.dll` 侧链接 `comctl32 shell32 ole32 msimg32` |
 | 注册 | `HKCU\Software\Classes`（免 UAC），`-Feature Propsheet` |
 | 样本 | `aida64-1.94.apk`（7.9 MB · v1+v2+v3）、`base2_1.92G.apk`（1.79 GB）、`bad/notzip.apk` |
@@ -569,7 +569,7 @@ out\x64\proptest.exe --file <apk> --verbose                          :: 不经�
 | 8 | 行模型单测 | ✅ 26/26（`propsheet_model_test --selftest`，含坏 JSON/Unicode/签名缺失路径） |
 | 9 | 卸载零残留 | ✅ `-Uninstall` 后 `HKCU\Software\Classes\.apk`、两个 CLSID 全部消失；重装后页面正常 |
 | 10 | worker 崩溃 | ✅ 页内"解析器异常退出（0xC0000005）"+ 重试，explorer 存活（`m3-propsheet-crash.png`） |
-| 11 | 浅色主题 | ✅ 白底深字、分组条浅灰、按钮蓝色（`m3-propsheet-light-theme.png`） |
+| 11 | 页内与属性窗口同色 | ✅ 取色：页内背景 `#F0F0F0` = 对话框背景 `#F0F0F0`（系统深色时页内仍是浅色，见 R-0007） |
 | 12 | 10 次开关（关窗时 worker 在跑） | ✅ explorer 句柄 4464 → 4435（**-29**），`apkinfo` 残留 0（`tools/propsheet-stress.ps1`） |
 
 ### 关键发现
@@ -586,7 +586,7 @@ out\x64\proptest.exe --file <apk> --verbose                          :: 不经�
 ### 崩溃钩子与一个真实教训
 
 验收"解析器崩溃"需要一个能让 worker 死掉的开关。环境变量传不进 explorer 拉起的子进程，所以用标志文件
-`%TEMP%pk-shell-ext.test-abort.on`：存在时 worker 等 300 ms 后 `ExitProcess(0xC0000005)`。
+`%TEMP%\pk-shell-ext.test-abort.on`：存在时 worker 等 300 ms 后 `ExitProcess(0xC0000005)`。
 
 第一版用的是 `RaiseException(0xC0000005)`，结果页面一直停在"正在解析…" —— 因为 WER 把进程挂住不退出，
 我们的读循环只能等到 10 s 兜底，最后报的是"超时"而不是"崩溃"。**能真崩的进程不一定立刻变成退出码**，
@@ -599,3 +599,44 @@ out\x64\proptest.exe --file <apk> --verbose                          :: 不经�
 3. 中英文双语（只做了中文文案）。
 4. 无障碍（自绘列表对 Narrator 不友好，已登记为 P1）。
 5. 多显示器 / 不同主题色（Accent color）下的观感。
+
+## 15. R-0007 记录（M3 · 配色改为"跟随宿主"，2026-11-04）
+
+### 背景（用户反馈）
+
+用户观察：**页内内容跟着亮暗切换，但属性窗口本身没有**。预想的逻辑是"页内不决定样式，亮暗交给系统层"，
+类比 PySide6 用原生主题——控件外观用操作系统自带的。当时系统是深色、属性窗口是浅色，我们的页内却是深色，
+正好与窗口相反。
+
+### 改动
+
+| 项 | 之前 | 现在 |
+| --- | --- | --- |
+| 背景 | 自配两套色板（`AppsUseLightTheme` 分支） | `SendMessage(host, WM_CTLCOLORDLG, …)` 返回的画刷颜色 |
+| 主文本 | 自配（#1B1B1B / #F0F0F0） | `SendMessage(host, WM_CTLCOLORSTATIC, …)` 后 `GetTextColor` |
+| 次文本 / 分隔线 / 链接 / 选中 | 自配 | `GetSysColor(COLOR_GRAYTEXT / 3DSHADOW / HOTLIGHT / HIGHLIGHT)` |
+| 分组标题 | 自定义浅色/深色色带 | 粗体标题 + `COLOR_3DSHADOW` 分隔线（不再铺底色） |
+| 字体 | `SPI_GETNONCLIENTMETRICS` | 先 `SendMessage(host, WM_GETFONT)`，取不到才回落 SPI |
+| 主题变化 | 只认 `WM_SETTINGCHANGE` + `ImmersiveColorSet` | `WM_SYSCOLORCHANGE` / `WM_THEMECHANGED` / `WM_SETTINGCHANGE` / `WM_DPICHANGED` 都重新问宿主 |
+| 读注册表 | 读 `AppsUseLightTheme` | **不读任何主题开关** |
+
+### 验收（系统深色、属性窗口浅色）
+
+```
+powershell -File tools\capture-propsheet.ps1 -ApkPath aida64-1.94.apk -OutPng docs\evidence\m3-propsheet-light.png -SkipUia
+取色（System.Drawing.GetPixel）：
+  dialog-bg (60,625)  = #F0F0F0
+  page-bg   (420,300) = #F0F0F0
+  page-bg-2 (430,120) = #F0F0F0
+```
+
+页内背景与对话框背景**完全一致**；文字用窗口的文本色；链接用系统 `COLOR_HOTLIGHT`；
+分组标题改为"粗体 + 分隔线"后不再出现"页内自带色带"的观感差异。
+证据：[docs/evidence/m3-propsheet-light.png](evidence/m3-propsheet-light.png)（本轮其它截图也已按新样式重拍：
+`m3-propsheet-hash / expanded / error / crash / big.png`）。
+
+### 仍然成立 / 仍然未验证
+
+- 仍然成立：全自绘只决定**排版**（行高、键列宽、省略号、展开、滚动、命中测试）。无障碍仍弱（P1）。
+- 未验证：**150% / 200% DPI**；第三方"深色属性页"宿主（如未来系统支持）下的取色——代码路径是同一套
+  `WM_CTLCOLOR*` 查询，但没有那样的宿主可测。

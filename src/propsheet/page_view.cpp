@@ -169,7 +169,12 @@ void PageView::Paint(HDC dc, HWND hwnd, const PageModel& model, const PageTheme&
       DrawIconAlpha(dc, icon, icon_x, icon_y, icon_size, icon_size);
     } else {
       RECT box{icon_x, icon_y, icon_x + icon_size, icon_y + icon_size};
-      FillRectColor(dc, box, theme.group_bg);
+      FillRectColor(dc, box, theme.bg);
+      HBRUSH frame = ::CreateSolidBrush(theme.separator);
+      if (frame != nullptr) {
+        ::FrameRect(dc, &box, frame);
+        ::DeleteObject(frame);
+      }
       HGDIOBJ old = ::SelectObject(dc, theme.font_bold);
       ::SetTextColor(dc, theme.muted);
       RECT inner = box;
@@ -228,42 +233,48 @@ void PageView::Paint(HDC dc, HWND hwnd, const PageModel& model, const PageTheme&
 
       switch (ref.kind) {
         case ItemKind::GroupHeader: {
-          FillRectColor(dc, row_rc, theme.group_bg);
+          // 原生观感：不铺自定义底色，粗体标题 + 底部一条系统分隔线
           HGDIOBJ old = ::SelectObject(dc, theme.font_bold);
           ::SetTextColor(dc, theme.text);
           RECT text_rc = row_rc;
           text_rc.left += metrics_.padding;
           DrawTextEllipsis(dc, model.groups[ref.group].title, text_rc, DT_LEFT);
           ::SelectObject(dc, old);
+          RECT line{row_rc.left + metrics_.padding, row_rc.bottom - 1,
+                    row_rc.right - metrics_.padding, row_rc.bottom};
+          FillRectColor(dc, line, theme.separator);
           break;
         }
         case ItemKind::Row: {
           if (is_selected) {
             FillRectColor(dc, row_rc, theme.selection);
           } else if (is_hot) {
-            FillRectColor(dc, row_rc, theme.group_bg);
+            FillRectColor(dc, row_rc, BlendColor(theme.bg, theme.selection, 12));
           }
+          const COLORREF key_color = is_selected ? theme.selected_text : theme.muted;
+          const COLORREF value_color = is_selected ? theme.selected_text : theme.text;
           const PageRow& row = model.groups[ref.group].rows[ref.row];
           HGDIOBJ old = ::SelectObject(dc, theme.font);
 
           int key_left = metrics_.padding;
           if (row.expandable()) {
             RECT arrow{key_left, row_rc.top, key_left + theme.Scale(14), row_rc.bottom};
-            ::SetTextColor(dc, theme.muted);
+            ::SetTextColor(dc, key_color);
             DrawTextEllipsis(dc, row.expanded ? kArrowExpanded : kArrowCollapsed, arrow, DT_LEFT);
             key_left += theme.Scale(14);
           }
           RECT key_rc{key_left, row_rc.top, key_left + metrics_.key_width, row_rc.bottom};
-          ::SetTextColor(dc, theme.muted);
+          ::SetTextColor(dc, key_color);
           DrawTextEllipsis(dc, row.key, key_rc, DT_LEFT);
 
           // 键为空的行（错误说明 / 警告）从左边距开始画，不占键列
           const int value_left = row.key.empty() ? metrics_.padding
                                                  : key_left + metrics_.key_width + theme.Scale(8);
           RECT value_rc{value_left, row_rc.top, row_rc.right - metrics_.padding, row_rc.bottom};
-          ::SetTextColor(dc, row.action ? theme.accent : theme.text);
+          ::SetTextColor(dc, row.action ? (is_selected ? theme.selected_text : theme.accent)
+                                        : value_color);
           DrawTextEllipsis(dc, row.value, value_rc, DT_LEFT);
-          if (row.action) {
+          if (row.action && is_hot) {
             // 动作行画一条下划线，表明可点
             SIZE size{};
             if (::GetTextExtentPoint32W(dc, row.value.c_str(), static_cast<int>(row.value.size()),
@@ -277,7 +288,7 @@ void PageView::Paint(HDC dc, HWND hwnd, const PageModel& model, const PageTheme&
           break;
         }
         case ItemKind::Child: {
-          if (is_hot) FillRectColor(dc, row_rc, theme.group_bg);
+          if (is_hot) FillRectColor(dc, row_rc, BlendColor(theme.bg, theme.selection, 12));
           const PageRow& row = model.groups[ref.group].rows[ref.row];
           if (ref.child < row.children.size()) {
             HGDIOBJ old = ::SelectObject(dc, theme.font);
@@ -290,7 +301,7 @@ void PageView::Paint(HDC dc, HWND hwnd, const PageModel& model, const PageTheme&
           break;
         }
         case ItemKind::Warning: {
-          if (is_hot) FillRectColor(dc, row_rc, theme.group_bg);
+          if (is_hot) FillRectColor(dc, row_rc, BlendColor(theme.bg, theme.selection, 12));
           if (ref.row >= model.warnings.size()) break;
           HGDIOBJ old = ::SelectObject(dc, theme.font);
           ::SetTextColor(dc, theme.muted);
