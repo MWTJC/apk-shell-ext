@@ -6,6 +6,7 @@
 #include <cctype>
 #include <set>
 #include <string_view>
+#include <utility>
 
 #include "core/apk_icon.h"
 #include "core/arsc.h"
@@ -124,6 +125,7 @@ bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha2
 
   // 组件计数、权限，以及 label 的资源引用
   std::set<std::string> perms;
+  std::set<std::string> seen_features;
   uint32_t label_res_id = kInvalidResId;
   for (const AxmlElement& el : elements) {
     if (el.tag == "activity" || el.tag == "activity-alias") {
@@ -137,6 +139,24 @@ bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha2
     } else if (el.tag == "uses-permission" || el.tag == "uses-permission-sdk-23") {
       std::string name;
       if (GetStringAttr(el, kAttrName, "name", &name) && !name.empty()) perms.insert(name);
+    } else if (el.tag == "uses-feature") {
+      std::string name;
+      if (GetStringAttr(el, kAttrName, "name", &name) && !name.empty() &&
+          seen_features.insert(name).second) {
+        ApkFeature feature;
+        feature.name = name;
+        // android:required 缺省 true；写错的清单可能给字符串 "false"，一并认
+        feature.required = true;
+        if (const AxmlAttr* a = el.Find(kAttrRequired, "required")) {
+          if (a->type == kResTypeIntBoolean || a->type == kResTypeIntDec ||
+              a->type == kResTypeIntHex) {
+            feature.required = a->data != 0;
+          } else if (a->has_string) {
+            feature.required = a->string_value != "false";
+          }
+        }
+        out->features.push_back(std::move(feature));
+      }
     } else if (el.tag == "application") {
       const AxmlAttr* a = el.Find(kAttrLabel, "label");
       if (a != nullptr && a->type == kResTypeReference) label_res_id = a->data;
@@ -261,6 +281,10 @@ bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha2
             [](const std::string& a, const std::string& b) {
               return DensityOrder(a) < DensityOrder(b);
             });
+
+  // ---------------------------------------------------------------- 签名
+  // 只读中央目录前的签名块（几 KB）与 META-INF 的 PKCS#7，不做摘要校验。
+  CollectApkSignature(zip, &out->signature, &out->warnings);
 
   // ---------------------------------------------------------------- 图标
   IconLocation icon;

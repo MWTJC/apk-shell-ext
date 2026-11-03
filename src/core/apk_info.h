@@ -8,9 +8,15 @@
 #include <vector>
 
 #include "core/byte_source.h"
+#include "core/apk_signature.h"
 #include "core/common.h"
 
 namespace apksx {
+
+struct ApkFeature {
+  std::string name;          // 如 android.hardware.camera
+  bool required = true;      // 清单里 android:required 缺省为 true
+};
 
 struct ComponentCounts {
   uint32_t activities = 0;  // 含 activity-alias
@@ -43,9 +49,13 @@ struct ApkInfo {
   uint32_t icon_height = 0;
   bool icon_adaptive = false;
 
-  // components / permissions（清单）
+  // components / permissions / features（清单）
   ComponentCounts components;
   std::vector<std::string> permissions;
+  std::vector<ApkFeature> features;
+
+  // 签名（APK Signing Block + META-INF 的 PKCS#7）
+  SignatureInfo signature;
 
   // diagnostics
   std::vector<std::string> warnings;

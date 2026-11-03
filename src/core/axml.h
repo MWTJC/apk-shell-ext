@@ -28,6 +28,7 @@ inline constexpr uint32_t kAttrMinSdkVersion = 0x0101020Cu;
 inline constexpr uint32_t kAttrVersionCode = 0x0101021Bu;
 inline constexpr uint32_t kAttrVersionName = 0x0101021Cu;
 inline constexpr uint32_t kAttrTargetSdkVersion = 0x01010270u;
+inline constexpr uint32_t kAttrRequired = 0x0101028Eu;  // android:required
 inline constexpr uint32_t kAttrIsSplitRequired = 0x01010591u;
 
 struct AxmlAttr {

@@ -19,7 +19,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
-| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON 骨架 + aapt2 交叉校验通过；**TD-001 已关闭**；签名块未做 |
+| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON + aapt2 交叉校验通过；**TD-001 已关闭**；**签名块与 features 已落地**；`splits` 未做 |
 | M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | ⬜ |
 | M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
@@ -113,6 +113,18 @@ flowchart LR
   越界垃圾让该包的 type 全部对不上号 —— 表现是"图标静默消失、只走启发式"。
   在 `qwxds-1.6.1.apk`（混淆包）上暴露，修复后 11/11 包与 aapt2 一致。
 
+**M2 实施记录 · 签名与 features（2026-11-04）**
+
+- `src/core/apk_signature.{h,cpp}`：v2/v3/v3.1 走 APK Signing Block（只读中央目录前的几 KB），
+  v1 走 `META-INF/*.(RSA|DSA|EC)` 的 PKCS#7；证书摘要 = DER 的 SHA-256。
+  不做摘要校验，`scheme` 语义是"检测到的签名块"（`base2_1.92G` 是活例子：v1 块在，验证器跳过）。
+- `src/core/apk_info`：新增 `features`（`uses-feature`，`android:required` 缺省 true）。
+- `ZipReader` 增加 `cd_offset()/cd_size()/ReadRange()`；`tests/thumbtest.cpp` 的 `--file/--dir/--list`
+  统一转绝对路径（相对路径在 `--shell` 模式下必失败，`0x80070002`）。
+- 夹具：`tests/gen_signed_fixtures.py` 造 v1-only（targetSdk 28 老包，否则 apksigner 自己拒收 v1-only）/
+  v2-only / v3-only；对照脚本 `tests/verify_signature.py`（22/22）与 `verify_apkinfo.py`（features，11/11）。
+- 代价：每个 worker 进程多 3–7 ms（crypt32/ASN.1 首次初始化），缩略图路径不受影响。
+
 **M2 完成度（2026-11-04 收尾，下一会话从这里继续）**
 
 | 交付项 | 状态 |
@@ -122,24 +134,33 @@ flowchart LR
 | ARSC 分段流式（TD-001） | ✅ 19.7 MB 真表 0.7–1.5 ms |
 | `--hash=sha256`（与 certutil 一致）、退出码 0/2/3、8 s watchdog | ✅ |
 | 与 `aapt2 dump badging` 交叉校验 | ✅ 11/11 |
-| `signature`（v1 / v2 / v3 方案 + 证书摘要） | ⬜ 下一步 |
-| `features`（uses-feature）、`splits`（.apks） | ⬜ |
+| `signature`（v1 / v2 / v3 方案 + 证书摘要） | ✅ 22/22 与 apksigner 一致（R-0005） |
+| `features`（uses-feature） | ✅ 11/11 与 aapt2 一致 |
+| `splits`（.apks 分包） | ⬜ 随 M4a 一起做（`.apk` 单包本身没有 splits 可列） |
 | TD-002：deflate 的大 arsc | ⬜ |
 
-**下一步：签名块（实现要点，来自 AOSP apksig 的公开格式，落地时必须逐项核对）**
+**签名块（已落地，2026-11-04；细节与实测见 [verification.md R-0005](verification.md)）**
 
-1. `apkthumb`/`apkinfo` 都要知道中央目录的偏移：给 `ZipReader` 加 `cd_offset()/cd_size()` getter（目前是私有成员）。
-2. APK Signing Block 紧贴在中央目录之前，形状是
-   `[uint64 size][id(4)+value(len) 序列][uint64 size]["APK Sig Block 42"(16 B)]`，两处 size 相等，用
-   `cd_offset - size` 反推块起点；magic 不匹配就当作没有 v2/v3。
-3. 块内 id：v2 = `0x7109871a`、v3 = `0xf05368c0`、v3.1 = `0x1b93ad61`（AOSP `ApkSigningBlockUtils`；
-   实现时用真实包反查一遍再写进代码）。没找到 v2/v3 才是 v1-only。
-4. value 是“嵌套的长度前缀序列”：signers → signed data → digests + certificates。
-   只要证书列表（每张 X.509 DER）即可算出摘要：SHA-256(DER) 就是用户在“签名摘要”一栏看到的值。
-5. v1：`META-INF/*.(RSA|DSA|EC)` 是 PKCS#7；用 `CryptQueryObject` 取证书，取第一条。
-   两者都失败 → `signature` 字段整体省略（JSON 里“没有”比 `null` 更好判断）。
-6. 验收：三张表（v1-only 老包 / v2 包 / v3 包）各至少一个真实样本；证书 SHA-256 与 `apksigner verify
-   --print-certs` 对照。**手头样本要先确认覆盖了这三种情况**，缺哪种就现造一个（v1-only 可以用老工具链重签名）。
+实现要点（当初的清单，逐条对应到现在的代码）：
+
+1. `ZipReader::cd_offset()/cd_size()/ReadRange()` —— 签名块贴在中央目录前面，必须偏移读。
+2. 块 = `[uint64 size][pairs][uint64 size]["APK Sig Block 42"(16 B)]`，size 不含第一个 size 字段，
+   所以块起点 = `cd_offset - (size + 8)`、pairs 区结束于 `size - 16`。（当初写的是 `cd_offset - size`，实测差 8。）
+3. id：v2 `0x7109871a`、v3 `0xf05368c0`、v3.1 `0x1b93ad61`（真实包反查确认）。
+4. value 是**三层**长度前缀：`lp(signers 序列)` → 每个 `lp(signer)` → `lp(signed data) lp(signatures) lp(pk)`；
+   signed data = `lp(digests) lp(certs) lp(attrs)`（v3/v3.1 的 min/max SDK 在 certs 之后）。
+   证书 DER 的 SHA-256 就是属性页"签名摘要"那一行的值。
+5. v1：`META-INF/*.(RSA|DSA|EC)` 走 `CryptQueryObject`（PKCS7_SIGNED），每块取第一条证书。
+   全都没找到 → `signature` 字段整体省略。
+6. 验收：v1-only / v2-only / v3-only 三个自造夹具 + 真实包共 22 个样本，与 `apksigner verify --verbose
+   --print-certs` 的方案集合与证书 SHA-256 全一致（`tests/verify_signature.py`）。
+
+**M2 剩余（下一步）**
+
+1. `splits`（`.apks/.xapk/.apkm` 的分包列表）→ 随 M4a 落地；`.apk` 单包不产生该字段。
+2. TD-002：deflate 的大 arsc（> 8 MB）目前跳过，需要可重定位的流式解压。
+3. V8 恶意样本回归、长跑（句柄 / 负缓存过期）。
+4. `permissions[].level`（保护级别）需要框架侧 `framework-res` 数据，v1 先不提供（只给 `declared`）。
 
 **风险 / 已批准的技术债**：ARSC 分段读的实现复杂度高于预期 → M1 先"整读 `resources.arsc`（≤ 8 MB；超限回落文件名启发式）"，登记为 **TD-001**（见 §5），M2 必须关闭。该债已于 2026-11-03 获批准。
 

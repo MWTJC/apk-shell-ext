@@ -94,8 +94,8 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 | 并发 | 每次调用独立进程；不共享状态；缓存只写文件（原子 rename） |
 | 安全 | 只读打开源文件（`FILE_SHARE_READ|WRITE|DELETE`）；不解压到临时目录；限额见 [formats.md](formats.md) §4 |
 
-**JSON schema v1（M2 实施中：已实现 `file` / `app` / `icon` / `components` / `permissions` / `diagnostics`；
-`signature` / `features` / `splits` 待补，字段只增不改）**
+**JSON schema v1（M2 实施中：已实现 `file` / `app` / `icon` / `signature` / `features` / `components` /
+`permissions` / `diagnostics`；`splits` 待 M4a 补齐，字段只增不改）**
 
 ```json
 {
@@ -120,6 +120,21 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 ```
 
 字段只增不改；破坏性变更升 `schema`。缺字段一律省略而不是 `null`，便于 UI 判断。
+
+**`signature` 的语义（M2 落地时的约定）**
+
+- `scheme` 列的是**包里检测到的签名块**（v1 / v2 / v3 / v3.1），**不是"校验通过"**：本阶段不做内容摘要校验，
+  所以一个被重打包过、v1 块失效的包仍会显示 `v1`（`.SF` 里 `X-Android-APK-Signed` 声明了 v2 时验证器会跳过 v1）。
+  要做"是否可信"必须在 M5 之前另开字段（`verified`），不要偷改 `scheme` 的含义。
+- `certs[].sha256` = 证书 DER 的 SHA-256，与 `apksigner verify --print-certs` 的
+  `certificate SHA-256 digest` 同源可比；多签名者按 DER 摘要去重。
+- `subject` 按 RFC 2253 反向输出（`CN=…, O=…, C=…`）；Windows 与 apksigner 的差别只在属性名写法
+  （`E=` vs `EMAILADDRESS=`），不参与任何一致性判定。
+- 证书有效期 `notBefore` / `notAfter` 是 ISO-8601 UTC；解析不到就省略。
+- 未签名 / 只有坏块的包整体省略 `signature`（不是 `null`）。
+
+**`features`** 只收清单里显式声明的 `uses-feature`（`required` 缺省 true）。
+aapt2 会额外打印"隐含特性"（默认 faketouch、屏幕方向、由权限推出的 wifi），那是它自己推的，我们**不**合成。
 
 ## 2.4 静态类型图标（M5）
 

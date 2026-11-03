@@ -100,7 +100,7 @@ class Json {
   }
 
   void Newline() {
-    if (!pretty_) return;
+    if (!pretty_ || out_.empty()) return;  // 根容器的 '{' 前面不该有空行
     out_ += '\n';
     out_.append(static_cast<size_t>(first_.size() - 1) * 2, ' ');
   }
@@ -220,6 +220,39 @@ std::string RenderJson(const ApkInfo& info, bool pretty) {
     j.EndArray();
   }
 
+  // ---- features
+  if (!info.features.empty()) {
+    j.Key("features");
+    j.BeginArray();
+    for (const apksx::ApkFeature& f : info.features) {
+      j.BeginObject();
+      j.Str("name", f.name);
+      j.Flag("required", f.required);
+      j.EndObject();
+    }
+    j.EndArray();
+  }
+
+  // ---- signature
+  // 未签名 / 结构不认识的包整体省略该字段（JSON 里"没有"比 null 更好判断）
+  if (!info.signature.empty()) {
+    j.Key("signature");
+    j.BeginObject();
+    j.StrArray("scheme", info.signature.schemes);
+    j.Key("certs");
+    j.BeginArray();
+    for (const apksx::SignatureCert& cert : info.signature.certs) {
+      j.BeginObject();
+      j.Str("subject", cert.subject);
+      j.Str("sha256", cert.sha256);
+      if (!cert.not_before.empty()) j.Str("notBefore", cert.not_before);
+      if (!cert.not_after.empty()) j.Str("notAfter", cert.not_after);
+      j.EndObject();
+    }
+    j.EndArray();
+    j.EndObject();
+  }
+
   // ---- diagnostics
   j.Key("diagnostics");
   j.BeginObject();
@@ -262,6 +295,24 @@ std::string RenderText(const ApkInfo& info) {
                          std::to_string(info.components.receivers) + ", providers " +
                          std::to_string(info.components.providers));
   line("permissions", std::to_string(info.permissions.size()));
+  if (!info.features.empty()) {
+    size_t required = 0;
+    for (const apksx::ApkFeature& f : info.features) {
+      if (f.required) ++required;
+    }
+    line("features", std::to_string(info.features.size()) + " (" +
+                         std::to_string(required) + " required)");
+  }
+  if (!info.signature.schemes.empty()) {
+    std::string schemes;
+    for (const std::string& s : info.signature.schemes) {
+      schemes += (schemes.empty() ? "" : ", ") + s;
+    }
+    line("signature", schemes);
+  }
+  for (const apksx::SignatureCert& cert : info.signature.certs) {
+    line("cert", cert.sha256 + "  " + cert.subject);
+  }
   line("sha256", info.sha256);
   for (const std::string& w : info.warnings) line("warning", w);
   char ms[32];

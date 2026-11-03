@@ -2,7 +2,7 @@
 """Cross-check apkinfo.exe against aapt2 (M2 acceptance, docs/roadmap.md M2).
 
 Compares package / versionCode / versionName / minSdk / targetSdk / native-code /
-uses-permission / application-label for every APK given on the command line.
+uses-permission / uses-feature / application-label for every APK given on the command line.
 
 Usage:
     python tests/verify_apkinfo.py [--aapt2 PATH] [--apkinfo PATH] <apk> [<apk> ...]
@@ -39,7 +39,7 @@ def run(aapt2: str, apk: Path) -> dict:
     if out.returncode != 0:
         raise RuntimeError(f"aapt2 failed on {apk}: {out.stderr[:400]}")
     text = out.stdout
-    data: dict = {"permissions": set(), "abis": set()}
+    data: dict = {"permissions": set(), "abis": set(), "features": set()}
 
     m = re.search(r"package: name='([^']*)' versionCode='([^']*)' versionName='([^']*)'", text)
     if m:
@@ -63,6 +63,13 @@ def run(aapt2: str, apk: Path) -> dict:
         data["abis"] = set(re.findall(r"'([^']+)'", m.group(1)))
     for name in re.findall(r"uses-permission: name='([^']+)'", text):
         data["permissions"].add(name)
+    # aapt2 会把"隐含特性"同时打两行：uses-feature 与 uses-implied-feature。
+    # 后者是 aapt2 自己推的（默认 faketouch、方向、权限推 wifi），清单里没有，不参与比较。
+    implied = set(re.findall(r"uses-implied-feature: name='([^']+)'", text))
+    for line in text.splitlines():
+        m = re.match(r"\s*uses-feature(-not-required)?: name='([^']+)'", line)
+        if m and m.group(2) not in implied:
+            data["features"].add((m.group(2), m.group(1) is None))
     return data
 
 
@@ -86,6 +93,7 @@ def ours(apkinfo: str, apk: Path) -> dict:
         "label": app.get("label"),
         "abis": set(app.get("abis", [])),
         "permissions": {p["name"] for p in doc.get("permissions", [])},
+        "features": {(f["name"], bool(f.get("required", True))) for f in doc.get("features", [])},
         "icon": doc.get("icon", {}).get("source"),
         "elapsedMs": doc.get("diagnostics", {}).get("elapsedMs"),
     }
@@ -126,6 +134,10 @@ def main() -> int:
             only_ref = sorted(ref["permissions"] - got["permissions"])
             only_ours = sorted(got["permissions"] - ref["permissions"])
             diffs.append(f"permissions: only-aapt2={only_ref} only-ours={only_ours}")
+        if ref["features"] != got["features"]:
+            only_ref = sorted(ref["features"] - got["features"])
+            only_ours = sorted(got["features"] - ref["features"])
+            diffs.append(f"features: only-aapt2={only_ref} only-ours={only_ours}")
 
         status = "OK  " if not diffs else "DIFF"
         print(

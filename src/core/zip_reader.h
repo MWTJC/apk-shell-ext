@@ -42,6 +42,15 @@ class ZipReader {
   const std::vector<ZipEntry>& entries() const { return entries_; }
   const ZipEntry* Find(std::string_view name) const;
 
+  // 中央目录的位置（APK Signing Block 紧贴在它前面，M2 签名块解析要用）
+  uint64_t cd_offset() const { return cd_offset_; }
+  uint64_t cd_size() const { return cd_size_; }
+
+  // 任意偏移的裸读（只给签名块这类"中央目录之外"的结构用）
+  bool ReadRange(uint64_t offset, void* buffer, size_t length) const {
+    return ReadAt(offset, buffer, length);
+  }
+
   // 中央目录的 SHA-1（十六进制）：只有"裸文件名"的 stream 场景用它区分同名文件
   const std::string& cd_digest_hex() const { return cd_digest_; }
 
@@ -58,6 +67,8 @@ class ZipReader {
 
   std::shared_ptr<ByteSource> source_;
   uint64_t file_size_ = 0;
+  uint64_t cd_offset_ = 0;
+  uint64_t cd_size_ = 0;
   std::vector<ZipEntry> entries_;
   std::string cd_digest_;
 };

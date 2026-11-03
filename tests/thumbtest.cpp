@@ -446,6 +446,18 @@ int wmain(int argc, wchar_t** argv) {
   if (cx < 16) cx = 256;
   if (repeat < 1) repeat = 1;
 
+  // 相对路径在 --shell 模式下会被 SHCreateItemFromParsingName 当非法路径（0x80070002），
+  // 统一转成绝对路径再用。
+  auto absolutize = [](std::wstring* p) {
+    if (p->empty() || std::filesystem::path(*p).is_absolute()) return;
+    std::error_code ec;
+    const auto abs = std::filesystem::absolute(*p, ec);
+    if (!ec) *p = abs.wstring();
+  };
+  absolutize(&file);
+  absolutize(&dir);
+  absolutize(&list);
+
   const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   (void)com;
 

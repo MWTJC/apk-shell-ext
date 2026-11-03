@@ -4,7 +4,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 已完成（R-0002）；M2 进行中**（`apkinfo.exe --json` 可用；**TD-001 已关闭**；签名块未做） |
+| 阶段 | **M1 已完成（R-0002）；M2 进行中**（`apkinfo.exe --json` 可用；**TD-001 已关闭**；**签名块与 uses-feature 已落地**；`splits` 未做） |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
 | 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，🟡 骨架可用）· `apkprop.dll`（属性页，M3） |
 | 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
@@ -33,7 +33,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 apk-shell-ext/
 ├─ docs/            设计、架构、格式矩阵、路线图、验收、ADR
 ├─ src/
-│  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、图标定位、WIC、缓存）— ✅ M1
+│  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、签名块、图标定位、WIC、缓存）— ✅ M1/M2
 │  ├─ thumbs/       IThumbnailProvider 壳扩展 — ✅ M1
 │  ├─ propsheet/    IShellPropSheetExt 壳扩展 — M3
 │  ├─ worker/       apkinfo.exe（JSON 输出）— M2
@@ -46,17 +46,22 @@ apk-shell-ext/
 
 ```bat
 :: 1) 构建（需要 VS 2022/2026 的 MSVC，脚本里写死了 vcvarsall 路径，换机器改 tools\build.cmd）
-tools\build.cmd Release                :: 产物在 out\x64\{apkthumb.dll,thumbtest.exe}
+tools\build.cmd Release                :: 产物在 out\x64\{apkthumb.dll, apkinfo.exe, thumbtest.exe}
 
 :: 2) 造测试包（需要 Android SDK 的 aapt2 + android.jar；路径可用 AAPT2 / ANDROID_JAR 覆盖）
 python tests\gen_fixtures.py
 
-:: 3) 单元验收（直接驱动 provider，不依赖 explorer）
+:: 3) 签名夹具 + 与 apksigner / aapt2 的交叉校验（需要 SDK 的 apksigner、aapt2、keytool）
+python tests\gen_signed_fixtures.py
+python tests\verify_signature.py --glob "tests\fixtures\generated\signed\*.apk"
+python tests\verify_apkinfo.py tests\fixtures\generated\*.apk
+
+:: 4) 单元验收（直接驱动 provider，不依赖 explorer）
 out\x64\thumbtest.exe --probe tests\fixtures\generated\f_png.apk
 out\x64\thumbtest.exe --file  tests\fixtures\generated\f_webp.apk --out C:\tmp\w.png
 out\x64\thumbtest.exe --dir   tests\fixtures\generated --repeat 3 --json
 
-:: 4) 注册（免 UAC，写 HKCU\Software\Classes）→ 资源管理器切"大图标"即可看到包内图标
+:: 5) 注册（免 UAC，写 HKCU\Software\Classes）→ 资源管理器切"大图标"即可看到包内图标
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Install
 out\x64\thumbtest.exe --shell --file D:\somewhere\app.apk     :: 走 Explorer 同一条管线
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
@@ -90,21 +95,23 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 这迫使解析核心改成"数据源无关"（文件 / 流），并加了一条带中央目录摘要的缓存键——见
 [ADR-0005](docs/adr/0005-isolated-thumbnail-host-and-stream-input.md)。
 
-**M2 已完成的四件（2026-11-04）**
+**M2 已完成的六件（2026-11-04）**
 
 1. `apkinfo.exe --json`（schema v1 的 `file`/`app`/`icon`/`components`/`permissions`/`diagnostics`），
    label 走 arsc 解析，`--hash=sha256` 与 `certutil` 一致，退出码 0/2/3 与 8 s watchdog 均实测。
 2. **TD-001 关闭**：`resources.arsc` 改为在 Stored 条目上开窗口流式跳读；19.7 MB 真表 0.7–1.5 ms。
 3. 大包测速：1.26 GB / 1.92 GB 的真包解析 3.8–6.9 ms，缩略图 37–41 ms（经 dllhost 172 ms）。
 4. 与 `aapt2 dump badging` 逐字段交叉校验 **11/11 一致**（含混淆包、自适应图标包、GB 级包）。
+5. **签名块**：v1（`META-INF/*.RSA|DSA|EC` 的 PKCS#7）+ v2/v3/v3.1（APK Signing Block）方案识别与证书 SHA-256；
+   自造 v1-only / v2-only / v3-only 三个夹具，与 `apksigner verify --print-certs` **22/22 一致**。
+   注意 `scheme` 的语义是"检测到的签名块"而非"校验通过"（见 [architecture.md §2.3](docs/architecture.md)）。
+6. `features`（`uses-feature` + `android:required`）→ 与 aapt2 **11/11 一致**。
 
 **下一步（M2 剩余，建议顺序）**
 
-1. **签名块**：v1（`META-INF/*.RSA|DSA|EC` 的 PKCS#7）+ v2/v3（APK Signing Block）方案识别与证书 SHA-256。
-   设计提示见 [docs/roadmap.md](docs/roadmap.md) 的「M2 · 接力说明」。
-2. `features`（`uses-feature`）与 `splits`（`.apks` 分包）两组字段 → schema v1 冻结。
-3. TD-002：deflate 的大 arsc（> 8 MB）目前跳过，需要可重定位的流式解压。
-4. V8 恶意样本回归、长跑（句柄/负缓存过期）。
+1. `splits`（`.apks/.xapk/.apkm` 分包列表）→ 与 M4a 一起做；`.apk` 单包不产生该字段。
+2. TD-002：deflate 的大 arsc（> 8 MB）目前跳过，需要可重定位的流式解压。
+3. V8 恶意样本回归、长跑（句柄/负缓存过期）。
 
 **接力说明**（下一会话从这里开始）
 

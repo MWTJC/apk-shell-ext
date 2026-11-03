@@ -28,6 +28,8 @@ void ZipReader::Close() {
   entries_.clear();
   cd_digest_.clear();
   file_size_ = 0;
+  cd_offset_ = 0;
+  cd_size_ = 0;
 }
 
 bool ZipReader::ReadAt(uint64_t offset, void* buffer, size_t length) const {
@@ -133,6 +135,9 @@ bool ZipReader::OpenSource(std::shared_ptr<ByteSource> source, Error* err) {
     Close();
     return false;
   }
+  // 签名块解析要用：中央目录的绝对位置在文件里是稳定的（哪怕是 ZIP64）
+  cd_offset_ = cd_offset;
+  cd_size_ = cd_size;
   return true;
 }
 

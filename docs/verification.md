@@ -178,7 +178,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 样本 | `tests\fixtures\generated\` 4 个 aapt2 真实构建的 APK（PNG/WebP/自适应/无图标）+ `tests\fixtures\generated\bad\` 8 个坏包 + 3 个真实包（aida64 8.2 MB、qwxds 1.1 MB、wwlocation 0.3 MB） |
 | 样本可复现性 | `python tests\gen_fixtures.py` 全程可复现：两次运行（不同 cwd）产物逐字节一致；脚本自带 141 条断言，任一条不满足即退出码 1。`aapt2 compile` 必须带 `--no-crunch`（否则 aapt2 会重编码 PNG，图标字节不再等于源文件），WebP 必须 `-lossless 1 -pix_fmt bgra`（默认 yuv420 会把 `#00FFFF` 舍入成 `#01FFFF`，颜色探针就失效了）。`generated/` 与 `real/` 都不入库 |
 | 磁盘 | 系统盘 NVMe（`C:`），工作目录 `D:`（同一物理盘） |
-| 观测工具 | Sysinternals Suite（Store 版 2026.10.0.0）`Procmon.exe`；脚本 `tools1-procmon.ps1` + `tools\parse-procmon-csv.py` |
+| 观测工具 | Sysinternals Suite（Store 版 2026.10.0.0）`Procmon.exe`；脚本 `tools\1-procmon.ps1` + `tools\parse-procmon-csv.py` |
 
 ### V2/V3 · 耗时（`thumbtest`，同进程批量）
 
@@ -308,13 +308,13 @@ thumbcache 复用）：
 
 ## 11. R-0003 记录（M2 部分，2026-11-03）
 
-**交付**：`outdpkinfo.exe`（静态 CRT，285 KB 级 core 复用）+ JSON schema v1 的
+**交付**：`outd\pkinfo.exe`（静态 CRT，285 KB 级 core 复用）+ JSON schema v1 的
 `file` / `app` / `icon` / `components` / `permissions` / `diagnostics` 六组字段。
 
 ### 交叉校验（判据：与 aapt2 一致，允许我们多显示）
 
 ```
-python testserify_apkinfo.py <apk...>
+python tests\verify_apkinfo.py <apk...>
 ```
 
 ```
@@ -403,9 +403,7 @@ python tests/gen_big_arsc.py
 ### 回归：11 个包与 aapt2 一致
 
 ```
-python testserify_apkinfo.py testsixtures\generated\*.apk testsixtures
-eal\*.apk testsixtures
-ealig\*.apk
+python tests\\verify_apkinfo.py tests\\fixtures\\generated\\*.apk tests\\fixtures\\real\\*.apk tests\\fixtures\\real\\big\\*.apk
 ...
 11/11 packages matched
 ```
@@ -428,3 +426,106 @@ ealig\*.apk
 1. `signature` / `features` / `splits` 仍未实现（M2 剩余部分）。
 2. 没有 ≥ 32 MB 的真 arsc 样本（19.7 MB 是现有上限）。
 3. TD-002（deflate 大 arsc）未解。
+
+## 13. R-0005 记录（M2 · 签名块 + uses-feature，2026-11-04）
+
+### 环境
+
+| 项 | 值 |
+| --- | --- |
+| OS | Windows 11 `10.0.26300` |
+| Explorer | `10.0.26100.1710` |
+| 构建 | commit `f8b0de4` + 本条改动，Release `/MT /W4 /WX` |
+| 对照工具 | `apksigner` / `aapt2`（build-tools 36.0.0），JDK `21.0.12.1` |
+| 样本 | 3 个自造签名夹具 + 5 个真实包（含 1.26 G / 1.92 G）+ 8 个坏包 |
+
+### 交付
+
+- `src/core/apk_signature.{h,cpp}`：v1（`META-INF/*.RSA|DSA|EC` 的 PKCS#7，`CryptQueryObject`）与
+  APK Signing Block 的 v2 / v3 / v3.1 识别 + 证书摘要。证书信息用 `CertCreateCertificateContext` /
+  `CertNameToStrW`（X500 + REVERSE）取，摘要 = 证书 DER 的 SHA-256。
+- `ZipReader` 增加 `cd_offset()/cd_size()/ReadRange()`（签名块贴在中央目录前，需要纯粹的偏移读）。
+- `apkinfo` JSON 增加 `signature`（`scheme` + `certs[]`）与 `features`（`uses-feature`）。
+- `tests/gen_signed_fixtures.py`：用一次性密钥 + apksigner 造 v1-only / v2-only / v3-only 三个真实签名包。
+- `tests/verify_signature.py`：与 `apksigner verify --verbose --print-certs` 对照。
+- `tests/verify_apkinfo.py` 增加 `uses-feature` 对照。
+
+### 签名块结构（用真实包逐字段核对过，不是"据说"）
+
+```
+块  = [uint64 size][pairs][uint64 size]["APK Sig Block 42"(16B)]
+      size 不含第一个 size 字段 → 块起点 = cd_offset - (size + 8)；pairs 区结束于 size - 16
+pair = [uint64 len = 4 + value_len][uint32 id][value]
+v2/v3/v3.1 的 value = lp(signers 序列)，序列里每个 signer 又各有一层 lp：
+  signer = lp(signed data) lp(signatures) lp(public key)
+  signed data = lp(digests) lp(certs) lp(attributes)   # v3/v3.1 的 min/max SDK 在 certs 之后
+```
+
+踩坑记录：只按"两层"解析（漏掉 signer 的 lp）时，数字看起来都自洽（`digests` 长度、证书长度全对得上），
+但读不到 signatures / public key —— 说明少了一层。用 `wwlocation` 的十六进制逐 4 字节核对了
+`1386 / 1382 / 808 / 44 / 748 / 268 / 294` 这串长度，才把层级定下来。**结构解析不能只看"能不能读出证书"**。
+
+### 与 apksigner 对照（22/22）
+
+```
+python tests/verify_signature.py --glob "tests/fixtures/generated/signed/*.apk" \
+    --glob "tests/fixtures/generated/*.apk" --glob "tests/fixtures/generated/bad/*.apk" \
+    --glob "tests/fixtures/real/*.apk" --glob "tests/fixtures/real/big/*.apk"
+... 22/22 matched
+```
+
+| 样本 | 我们的 scheme | apksigner | 证书 SHA-256（前 8 位） |
+| --- | --- | --- | --- |
+| `s_v1.apk`（自造，targetSdk 28） | v1 | v1 | `787a5773` |
+| `s_v2.apk`（自造） | v2 | v2 | `787a5773` |
+| `s_v3.apk`（自造） | v3 | v3 | `787a5773` |
+| `aida64-1.94.apk` | v1, v2, v3 | v1, v2, v3 | `a40da80a` |
+| `wwlocation-probe-debug.apk` | v2 | v2 | `bbab1252` |
+| `base_1.26G.apk` | v2 | v2 | `b04bbba0` |
+| `base2_1.92G.apk` | v1, v2 | v2 | `9ac7d84e` |
+| 8 个坏包 + 4 个未签名夹具 | （无 `signature`） | DOES NOT VERIFY | — |
+
+`base2` 的 v1 差异已查明原因：它的 `META-INF/GF2.SF` 写了 `X-Android-APK-Signed: 2`，
+验证器因此跳过 v1（报 `v1=false`），但 v1 块本身确实在包里。
+**所以 `signature.scheme` 的语义是"检测到的签名块"，不是"校验通过"**——本阶段不做摘要校验。
+
+另外：证书主题我们按 RFC 2253 + 反向输出，与 apksigner 只差属性名写法（`E=` vs `EMAILADDRESS=`），
+序列化时不参与比较，只有 `sha256` 参与。
+
+### features（uses-feature）与 aapt2 对照（11/11）
+
+```
+python tests/verify_apkinfo.py tests/fixtures/generated/*.apk tests/fixtures/real/*.apk tests/fixtures/real/big/*.apk
+... 11/11 packages matched
+```
+
+含 `base2_1.92G.apk` 的 `android.hardware.vulkan.version`（`required=true`）与
+`base_1.26G.apk` 的 `android.hardware.bluetooth`（`required=false`）。
+aapt2 会把"隐含特性"同时打成 `uses-feature` 与 `uses-implied-feature` 两行（默认 faketouch、屏幕方向、
+由权限推出来的 wifi），对照脚本按后者剔除，否则会误判成我们少字段。
+
+### 耗时（5 次取 min/max，`diagnostics.elapsedMs`）
+
+| 样本 | 加签名前 | 现在 | 说明 |
+| --- | --- | --- | --- |
+| `f_png.apk`（未签名） | 0.7–1.0 ms | 0.7–1.0 ms | 无签名块，多花的只是扫描 `META-INF` 名字 |
+| `wwlocation-probe-debug.apk`（v2） | — | 3.9–6.2 ms | 小包，主要是 crypt32/ASN.1 首次初始化 |
+| `aida64-1.94.apk`（v1+v2+v3） | — | 9.7–10.8 ms | 三种方案都解析，证书去重后 1 张 |
+| `base_1.26G.apk`（v2） | 6.2 ms | 9.1–11.8 ms | +3–5 ms |
+| `base2_1.92G.apk`（v1+v2） | 3.8–5.1 ms | 10.1–12.2 ms | +5–7 ms（多一个 PKCS#7） |
+
+结论：每个 worker 进程多付 3–7 ms（`CertCreateCertificateContext` / `CryptQueryObject` 首次初始化），
+相对 300 ms（缩略图）/ 1 s（属性页）判据余量仍然很大。**缩略图路径完全不受影响**：
+`apkthumb` 不调用签名解析，`apkthumb.dll` 仍是 308,736 B（与 R-0004 相同）。
+
+### 顺带修掉
+
+`thumbtest --shell` 传相对路径时永远是 `hr=0x80070002`（`SHCreateItemFromParsingName` 不收相对路径）。
+现在 `--file/--dir/--list` 一律先转绝对路径；README 里的示例可以直接复制粘贴。
+
+### 未验证（不许当作通过）
+
+1. **v3.1（密钥轮换）** 与**多签名者**没有真实样本；代码按"遍历全部 signer、证书按 DER 摘要去重"实现，未实测。
+2. **不做摘要校验**，所以 `signature` 只代表"块存在"，不代表签名有效（`base2` 就是例子）。
+3. **EC / DSA 的 v1 块**没有样本（现有样本全是 RSA）。
+4. `splits`（`.apks` 分包）与 `permissions[].level` 仍未实现；`splits` 随 M4a 一起做。

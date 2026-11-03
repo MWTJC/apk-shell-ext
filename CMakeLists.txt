@@ -58,12 +58,13 @@ add_library(apksx_core STATIC
   src/core/arsc_stream.cpp
   src/core/apk_icon.cpp
   src/core/apk_info.cpp
+  src/core/apk_signature.cpp
   src/core/wic_image.cpp
   src/core/thumb_cache.cpp
 )
 target_include_directories(apksx_core PUBLIC src)
 target_link_libraries(apksx_core PUBLIC apksx_miniz
-  bcrypt windowscodecs ole32 shlwapi)
+  bcrypt crypt32 windowscodecs ole32 shlwapi)
 target_compile_definitions(apksx_core PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN
                                                NOMINMAX APKSX_PARSER_VERSION="m1.0")
 
