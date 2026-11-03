@@ -4,10 +4,10 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M0 已完成（2026-11-03 评审通过）；M1 待开工**（尚无代码） |
+| 阶段 | **M1 已完成（2026-11-03，验收记录 R-0002）；M2 待开工** |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
-| 产物 | `apkthumb.dll`（缩略图）· `apkprop.dll`（属性页）· `apkinfo.exe`（解析 worker） |
-| 许可 | 待定（建议 MIT；若引入第三方解析库，逐个核许可后再定，见 ADR-0004） |
+| 产物 | `apkthumb.dll`（缩略图，✅ 已实现）· `apkinfo.exe`（解析 worker，M2）· `apkprop.dll`（属性页，M3） |
+| 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
 
 ## 一句话设计
 
@@ -33,13 +33,37 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 apk-shell-ext/
 ├─ docs/            设计、架构、格式矩阵、路线图、验收、ADR
 ├─ src/
-│  ├─ core/         解析核心（zip 容器、AXML、ARSC、proto bundle、plist、鸿蒙 index）— M2
-│  ├─ thumbs/       IThumbnailProvider 壳扩展 — M1
+│  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、图标定位、WIC、缓存）— ✅ M1
+│  ├─ thumbs/       IThumbnailProvider 壳扩展 — ✅ M1
 │  ├─ propsheet/    IShellPropSheetExt 壳扩展 — M3
-│  └─ worker/       apkinfo.exe（JSON 输出）— M2
-├─ tools/           注册/卸载脚本、缓存清理、ProcMon 配方、统计脚本
-└─ tests/           固件包（自造）与断言
+│  ├─ worker/       apkinfo.exe（JSON 输出）— M2
+│  └─ third_party/  miniz（raw deflate，MIT，只编 C 源）
+├─ tools/           build.cmd（vcvars+CMake+Ninja）、register.ps1（装/卸）
+└─ tests/           gen_fixtures.py（aapt2 造真实包）、thumbtest.cpp（验收工具）
 ```
+
+## 快速上手（M1 已可跑）
+
+```bat
+:: 1) 构建（需要 VS 2022/2026 的 MSVC，脚本里写死了 vcvarsall 路径，换机器改 tools\build.cmd）
+tools\build.cmd Release                :: 产物在 out\x64\{apkthumb.dll,thumbtest.exe}
+
+:: 2) 造测试包（需要 Android SDK 的 aapt2 + android.jar；路径可用 AAPT2 / ANDROID_JAR 覆盖）
+python tests\gen_fixtures.py
+
+:: 3) 单元验收（直接驱动 provider，不依赖 explorer）
+out\x64\thumbtest.exe --probe tests\fixtures\generated\f_png.apk
+out\x64\thumbtest.exe --file  tests\fixtures\generated\f_webp.apk --out C:\tmp\w.png
+out\x64\thumbtest.exe --dir   tests\fixtures\generated --repeat 3 --json
+
+:: 4) 注册（免 UAC，写 HKCU\Software\Classes）→ 资源管理器切"大图标"即可看到包内图标
+powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Install
+out\x64\thumbtest.exe --shell --file D:\somewhere\app.apk     :: 走 Explorer 同一条管线
+powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
+```
+
+诊断日志：存在 `%TEMP%\apk-shell-ext.debug.on` 时写 `%LOCALAPPDATA%\apk-shell-ext\apkthumb.log`。
+清缓存：`out\x64\thumbtest.exe --clean-cache`。
 
 ## 文档索引
 
@@ -49,22 +73,32 @@ apk-shell-ext/
 | [docs/architecture.md](docs/architecture.md) | 组件与进程边界、三个产物契约、JSON schema、注册表契约、缓存 |
 | [docs/formats.md](docs/formats.md) | APK/APKS/XAPK/APKM/AAB/IPA/HAP/APPX 的容器与图标位置矩阵、安全限额 |
 | [docs/roadmap.md](docs/roadmap.md) | **实现阶段 M0–M5**、每阶段交付/验收/退出条件、风险登记 |
-| [docs/verification.md](docs/verification.md) | 把「无感」变成可测判据：ProcMon 配方、耗时与内存预算、记录表 |
-| [docs/adr/](docs/adr/README.md) | 架构决策记录（4 条，冻结前三条不可被后续阶段悄悄推翻） |
+| [docs/verification.md](docs/verification.md) | 把「无感」变成可测判据：ProcMon 配方、耗时与内存预算、记录表（R-0002 = M1 实测） |
+| [docs/adr/](docs/adr/README.md) | 架构决策记录（5 条；前四条冻结，0005 由 M1 实测得出） |
 
 ## 当前状态
 
-**M0 已完成（2026-11-03 评审通过）**：文档与接口/验收基线冻结，三项决策已确认——① 小图标放弃包内图标、改用格式差异化静态 ico；② C++ / 静态 CRT / 无托管运行时（性能优先）；③ M1 允许"整读 `resources.arsc`（≤ 8 MB）"的技术债（TD-001）。
+**M1 已完成（2026-11-03）**：`.apk` 缩略图闭环全部落地——CMake/Ninja 工程（`/MT`、`/W4 /WX`）、
+`apkthumb.dll`（279 KB，只导入系统 DLL）、`tools\register.ps1`（HKCU 免 UAC，卸载零残留）、
+自建正/负缓存、`tests\thumbtest.exe` 验收工具、`tests\gen_fixtures.py`（aapt2 造真实包）。
 
-**下一步 M1**：APK 缩略图最小闭环——先出可编译工程 + `register.ps1`，用本机 APK 跑出第一组 ProcMon 与耗时数字，再谈属性页。
+**实测数字**（[verification.md §10](docs/verification.md)）：100 个包冷 P50 8.2 ms / P95 14.9 ms，热 P50 1.3 ms；
+走真实 Explorer 管线（`--shell`，经 dllhost）冷 12–21 ms、热 < 3 ms；8 个坏包全部优雅失败、进程不崩。
 
-**下次开工清单（M1，按顺序）**
+**M1 的关键意外**：缩略图 handler 并不在 explorer.exe 里跑，而是被放进 `dllhost.exe` 隔离宿主，
+且只通过 `IInitializeWithStream` 喂数据（只实现 `IInitializeWithItem` 时系统返回 `0x8004B200`）。
+这迫使解析核心改成"数据源无关"（文件 / 流），并加了一条带中央目录摘要的缓存键——见
+[ADR-0005](docs/adr/0005-isolated-thumbnail-host-and-stream-input.md)。
 
-1. `CMakeLists.txt` + `src/thumbs` 空壳，能编出 x64 `apkthumb.dll`（`/MT`、`/W4 /WX`）。
-2. `tools\register.ps1 -Install|-Uninstall`：写 `.apk\ShellEx\{E357FCCD…}` + CLSID，卸载可回滚。
-3. ZIP 中央目录 + 最小 AXML + 最小 ARSC（TD-001 允许整读 ≤ 8 MB）→ WIC 出图。
-4. 自建缓存 + 负缓存 + 300 ms 超时。
-5. `tests\fixtures\` 三个自造包；跑 V1（ProcMon 0 命中）与 V2/V3（冷热耗时）并写进 `docs/verification.md`。
+**下一步 M2**：解析核心 + `apkinfo.exe --json`，把全量元数据搬出 DLL，并**关闭 TD-001**（ARSC 改分段流式）。
+
+**下次开工清单（M2，按顺序）**
+
+1. `src/core` 补齐：签名块（v2/v3 方案识别 + 证书摘要）、权限/组件计数、ABI/密度/locale 汇总、
+   `--hash=sha256`（与 `certutil` 对照）、JSON v1 输出（字段只增不改）。
+2. ARSC 分段流式读取，删除"整读 ≤ 8 MB"路径 → TD-001 关闭，且 ≥ 32 MB 资源表仍满足 V2。
+3. `.apks/.xapk/.apkm`（外层 ZIP + `base.apk`）顺带做掉（M4a，复用 APK reader）。
+4. 安全限额落地 + 3 个构造样本（条目炸弹 / 超大 arsc / 路径穿越）的拒绝用例。
 
 ## 变更纪律（写给自己）
 

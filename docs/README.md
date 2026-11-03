@@ -11,7 +11,7 @@
 | [formats.md](formats.md) | 八种安装包的容器/manifest/资源表/图标位置、跨格式选图算法、安全限额 | 做 M4 时 |
 | [roadmap.md](roadmap.md) | **M0–M5 阶段**、每阶段交付/验收/退出条件、风险登记、DoD | 每次开工前 |
 | [verification.md](verification.md) | 把"无感"变成可复现的数字：ProcMon 配方、耗时/内存判据、记录表 | 每阶段收尾 |
-| [adr/](adr/README.md) | 已冻结的架构决策（缩略图接口、禁止项、worker、技术栈） | 想推翻某个约束前 |
+| [adr/](adr/README.md) | 已冻结的架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主） | 想推翻某个约束前 |
 
 ## 写作约定
 

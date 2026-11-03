@@ -135,3 +135,106 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 编号 | 日期 | 阶段 | 结论 | 证据（命令/输出摘要） | 未验证 |
 | --- | --- | --- | --- | --- | --- |
 | R-0001 | 2026-11-03 | M0 | 文档基线建立；**未做任何代码验证** | 本套文档 | M1 起全部待测 |
+| R-0002 | 2026-11-03 | M1 | APK 缩略图闭环打通：真实 Explorer 管线（`IShellItemImageFactory` → `dllhost.exe` → `IInitializeWithStream`）能出包内图标；解析正确率与 aapt2 一致；坏包不崩 | 见下 §10 | V1（ProcMon 未安装）、V4（VMMap）、V8、真实 Explorer 窗口目视 |
+
+## 10. R-0002 详细记录（M1，2026-11-03）
+
+### 环境
+
+| 项 | 值 |
+| --- | --- |
+| OS | Windows 11（宿主报告 10.0.26300），x64 |
+| 工具链 | MSVC 19.51.36260（VS 18 Community，MSVC 14.51 工具集）· CMake 3.31.3 · Ninja 1.12.1 |
+| 构建 | `tools\build.cmd Release`（`/MT`、`/W4 /WX`、`/guard:cf`），产物 `out\x64\{apkthumb.dll, thumbtest.exe}` |
+| 样本 | `tests\fixtures\generated\` 4 个 aapt2 真实构建的 APK（PNG/WebP/自适应/无图标）+ `tests\fixtures\generated\bad\` 8 个坏包 + 3 个真实包（aida64 8.2 MB、qwxds 1.1 MB、wwlocation 0.3 MB） |
+| 磁盘 | 系统盘 NVMe（`C:`），工作目录 `D:`（同一物理盘） |
+
+### V2/V3 · 耗时（`thumbtest`，同进程批量）
+
+```
+thumbtest --clean-cache
+thumbtest --dir <100 个 APK 的目录> --repeat 3 --json
+```
+输出：
+```
+summary{"count":100,"failed":25,"coldP50":8.20,"coldP95":14.92,"coldMax":111.57,
+        "hotP50":1.31,"hotP95":2.24,"hotMax":2.65}
+```
+`failed=25` 全部是 `f_noicon.apk`（包内确实没有 `android:icon`），属预期；
+`coldMax=111.57 ms` 是进程内第一次解 WebP 时的编解码器初始化，只发生一次。
+
+**判据对照**：冷 P50 ≤ 120 ✓（8.2）、P95 ≤ 300 ✓（14.9）；热 P50 ≤ 20 ✓（1.3）、P95 ≤ 50 ✓（2.2）。
+
+### V2/V3 · 真实 Explorer 管线（`--shell`，经 dllhost）
+
+```
+thumbtest --shell --dir <6 个刚复制、系统 thumbcache 未命中的 APK> --repeat 2 --json
+```
+```
+a1(自制 PNG)  first=158.82  last=2.98
+b1(自制 WebP) first=114.46  last=0.65
+c1(aida64)    first= 20.81  last=0.52
+d1(自适应)    first= 13.40  last=0.66
+e1(qwxds)     first= 17.23  last=1.07
+f1(自制 PNG)  first= 12.04  last=0.42
+summary{"coldP50":20.81,"coldP95":158.82,"hotP50":0.66,"hotP95":2.98}
+```
+前两条的 100–160 ms 是 dllhost 进程启动 + WIC WebP 编解码器初始化；**Steady state 12–21 ms**，
+系统 thumbcache 命中后 < 3 ms。均在 300 ms 预算内。
+
+### 解析正确性（`--probe`，与 aapt2 输出对照）
+
+| 样本 | aapt2 dump badging / resources | 本实现 |
+| --- | --- | --- |
+| `f_png.apk` | package com.example.pngicon，versionCode 10203，versionName 1.2.3，minSdk 26，targetSdk 34，icon `0x7f010000` = `res/mipmap-xxxhdpi-v4/ic_launcher.png` | 全部一致；中心像素 `FF00FF`（= xxxhdpi 的洋红，证明按密度选对了） |
+| `f_webp.apk` | icon `res/mipmap-xxhdpi-v4/ic_launcher.webp` | 一致；中心像素 `00FFFF` |
+| `f_adaptive.apk` | `mipmap-anydpi-v26/ic_launcher.xml` + `mipmap-xxxhdpi-v4/ic_launcher.png` | 选中 xxxhdpi 光栅回退（M1 不做 adaptive 合成）；中心像素 `0066FF` |
+| `f_noicon.apk` | 无 `android:icon` | 返回 `E_FAIL`，负缓存 |
+| `aida64-1.94.apk` | `res/mipmap-xxxhdpi-v4/ic_launcher.png` | 一致，缩略图为红色 "64" 图标（人工目视） |
+| `qwxds-1.6.1.apk` | 资源名被混淆为 `res/xC.webp` | 通过 arsc 解析到位（非启发式），缩略图为默认安卓机器人图标 |
+
+### V5 · 健壮性（8 个坏包，同一进程内连续处理）
+
+| 样本 | 结果 |
+| --- | --- |
+| `empty.apk`（0 字节） | `E_FAIL`，日志"文件太小，不是有效 ZIP" |
+| `notzip.apk`（4 KB 随机字节） | `E_FAIL`，"未找到 ZIP 结束记录" |
+| `trunc.apk`（真实包截断 60%） | `E_FAIL`，同上 |
+| `bomb_entries.apk`（70000 条目） | `E_FAIL`，"ZIP 条目数超限（>65535）" |
+| `deflate_bomb.apk`（声明 300 MB） | `E_FAIL`，清单条目超过 8 MB 上限，拒绝解压 |
+| `traversal.apk`（`../../evil.dll` 条目名） | `E_FAIL`；全程不落盘（无临时文件产生） |
+| `bigarsc.apk`（64 MB 资源表，TD-001 上限 8 MB） | 跳过 arsc，走"按文件名猜"启发式并**成功出图**（实测 5.8 ms），符合 TD-001 设计意图 |
+| `badicon.apk`（图标数据替换为垃圾） | `E_FAIL`，"WIC 无法解码该图像"，负缓存生效（第二次 0.95 ms vs 第一次 30.3 ms） |
+
+进程全程未崩溃（同一 `thumbtest.exe` 进程内顺序处理 8 个坏包 + 3 个重复）。
+
+### V6 · 安装/卸载零残留
+
+```
+powershell -File tools\register.ps1 -Install       # 写 HKCU\Software\Classes（免 UAC）
+powershell -File tools\register.ps1 -Uninstall
+测试路径: Test-Path 'HKCU:\Software\Classes\.apk\ShellEx'                     -> False
+          Test-Path 'HKCU:\Software\Classes\CLSID\{A7C4E1B0-...-7B01}'        -> False
+```
+安装写入的两个键（`.apk\ShellEx\{E357FCCD…}`、`CLSID\{…}\InprocServer32`）连同被清空的
+`.apk\ShellEx` 父键一并移除；备份文件 `%LOCALAPPDATA%\apk-shell-ext\install-backup.json`
+在卸载后删除。
+
+### 二进制规模（对照 ADR-0004 的"两个 DLL 合计 < 500 KB"）
+
+| 产物 | 大小 |
+| --- | --- |
+| `apkthumb.dll` | 279 KB |
+| `thumbtest.exe`（验收工具，不进交付物） | 379 KB |
+
+### 本阶段未验证（不许当作通过）
+
+1. **V1 零开销**：本机未安装 ProcMon，未能做"详细信息视图滚动 30 s → 0 次 `CreateFile`"的正式判据。
+   间接证据：注册表里只有 `.apk\ShellEx\{E357FCCD…}` 一个 handler，没有 `IPropertyStore` / 列 / 预览处理器；
+   `thumbtest --file` 的缓存命中路径也不会打开源文件（键来自 `GetFileAttributesEx`）。
+2. **V4 explorer 内存**：需要 VMMap/任务管理器采样，未做。
+3. **V8 恶意样本**：未取公开的 libwebp 崩溃样本；只验证了"坏 PNG 数据被 WIC 拒绝"。
+4. **真实 Explorer 窗口目视**：用 `IShellItemImageFactory`（与 Explorer 同一条管线）验证，
+   但没有切到"大图标"视图截图；M1 退出条件里的"人工确认 3 个真实包图标"是通过
+   逐张查看生成的 PNG 完成的。
+5. 句柄泄漏（开关 100 次）与 24 h 负缓存过期策略未做长跑验证。

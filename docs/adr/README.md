@@ -9,6 +9,7 @@
 | [0002](0002-lazy-metadata-and-banned-handlers.md) | 元数据只走属性页；**禁止** `IPropertyStore` / 列 / 预览 / Infotip | 已采纳（禁止项） | M3 |
 | [0003](0003-out-of-proc-parser.md) | 全量解析放独立 worker 进程，DLL 只做 UI/IPC | 已采纳 | M2/M3 |
 | [0004](0004-stack-and-dependency-boundary.md) | C++20 / MSVC / CMake / 静态 CRT / WTL；禁止 MFC、Qt、.NET、自有解码器 | 已采纳（禁止项） | M1 |
+| [0005](0005-isolated-thumbnail-host-and-stream-input.md) | 缩略图在 dllhost 隔离宿主里跑、输入是 IStream；解析核心改为 ByteSource，流模式缓存键含中央目录摘要 | 已采纳（M1 实测得出） | M1 |
 
 ## 写作规则
 

@@ -18,7 +18,7 @@ flowchart LR
 | 阶段 | 主题 | 产出 | 估时 | 状态 |
 | --- | --- | --- | --- | --- |
 | M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
-| M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ⬜ 待开工 |
+| M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
 | M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | ⬜ |
 | M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | ⬜ |
 | M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
@@ -71,6 +71,32 @@ flowchart LR
 | V6 可卸载 | 卸载后注册表与安装前 diff = 0 | reg export 前后对比 |
 
 **退出条件**：V1–V6 全绿，且"图标是否像应用"由你人工确认 3 个真实包。
+
+**M1 交付记录（2026-11-03）**
+
+落地内容（可对照 `src/`、`tools/`、`tests/`）：
+
+- `src/core`：`byte_source`（文件/流两种数据源）、`zip_reader`（EOCD + ZIP64 + 中央目录 + raw deflate）、
+  `string_pool`、`axml`（二进制清单）、`arsc`（含 sparse / Offset16 编码）、`apk_icon`（ID→密度挑选→启发式回退）、
+  `wic_image`（WIC 解码 + PNG 编码）、`thumb_cache`（正/负缓存 + 200 MB 修剪）、`file_util`、`log`。
+- `src/thumbs`：`IThumbnailProvider` + `IInitializeWithStream` / `IInitializeWithItem` / `IInitializeWithFile`，
+  `DllGetClassObject` / `DllCanUnloadNow`，无注册导出（注册表由脚本写）。
+- `tools/register.ps1`：`-Install` / `-Uninstall`，默认写 `HKCU`（免 UAC），带备份/回滚，卸载零残留。
+- `tools/build.cmd`：一次完成 vcvars + CMake + Ninja（本机无 VS2022 generator，用 Ninja）。
+- `tests/gen_fixtures.py`：用本机 `aapt2` 生成**真实** AXML/ARSC 的 APK（4 个正常 + 8 个坏包），
+  并附 `MANIFEST.json` 期望值；`tests/thumbtest.cpp` 是验收工具（probe / 单文件 / 批量 / `--shell` / 清缓存）。
+
+与计划的偏差（均已写进 ADR）：
+
+1. **缩略图跑在 dllhost 隔离宿主、输入是 IStream** —— 见 [ADR-0005](adr/0005-isolated-thumbnail-host-and-stream-input.md)。
+   这是 M1 最重要的发现：只实现 `IInitializeWithItem` 时 Explorer 管线直接失败（`0x8004B200`）。
+2. **工具链用 MSVC 14.51（VS 18 Community）+ Ninja**，而非 ADR-0004 写的 v143 + VS 生成器：
+   本机没有 VS2022 生成器，CMake 3.31 也不认 VS 18 生成器；`/MT`、`/W4 /WX`、`/guard:cf` 等约束不变。
+3. **TD-001 仍然在**：`resources.arsc` 仍整读（≤ 8 MB，超限回落启发式，实测 64 MB 资源表也能出图）。M2 关闭。
+4. adaptive icon 在本阶段用"同名光栅回退"，不做图层合成（原计划 M2 合成）。
+
+验收数字见 [verification.md §10](verification.md)：冷 P50 8.2 ms / P95 14.9 ms（100 个包），
+热 P50 1.3 ms；真实 Explorer 管线冷 12–21 ms（首次含 dllhost 启动 100–160 ms）。
 
 **风险 / 已批准的技术债**：ARSC 分段读的实现复杂度高于预期 → M1 先"整读 `resources.arsc`（≤ 8 MB；超限回落文件名启发式）"，登记为 **TD-001**（见 §5），M2 必须关闭。该债已于 2026-11-03 获批准。
 

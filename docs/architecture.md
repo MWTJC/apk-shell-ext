@@ -34,6 +34,9 @@ flowchart LR
 1. `apkthumb.dll` / `apkprop.dll` 只依赖系统 DLL + 静态 CRT，禁止进入 explorer 的第三方运行时。
 2. 全量解析只在 `apkinfo.exe`；两个 DLL 通过"命令行 + 匿名管道"与它通信（不注册 COM LocalServer，避免 surrogate 配置与权限问题）。
 3. 缩略图路径**不经过 worker**（v1）：进程启动 ~20 ms 会把"≤300 ms"的预算吃掉一大半；图标解码用 WIC 在 DLL 内完成。这条在 M1 用实测复核，若 PNG/WebP 解码体积超标再议。
+4. **缩略图 handler 实际运行在 `dllhost.exe`（COM surrogate）里，输入是 `IInitializeWithStream`**
+   `[实测 R-0002]`。因此解析核心只依赖 `ByteSource`（文件 / 流两种实现），不依赖路径；
+   属性页（M3）仍在 explorer 内，但同样只做 UI + IPC。
 
 ## 2. 产物契约
 
@@ -41,9 +44,9 @@ flowchart LR
 
 | 项 | 约定 |
 | --- | --- |
-| 实现接口 | `IThumbnailProvider` + `IInitializeWithItem`（回退 `IInitializeWithFile`） |
-| 导出 | 仅 `DllGetClassObject` / `DllCanUnloadNow`（+ 安装器用的 `DllRegisterServer` / `DllUnregisterServer`，或由脚本写注册表二选一，M1 定） |
-| CLSID | `{A7C4E1B0-…}`（实现时生成并写进 ADR/README，勿与 HashTab `{8A56567E-…}`、果核 `{9179448A-…}` 混淆） |
+| 实现接口 | `IThumbnailProvider` + `IInitializeWithStream`（隔离宿主）+ `IInitializeWithItem` / `IInitializeWithFile`（进程内） |
+| 导出 | 仅 `DllGetClassObject` / `DllCanUnloadNow`（+ 安装器用的 `DllRegisterServer` / `DllUnregisterServer`，或由脚本写注册表二选一，M1 定：**由 `tools\register.ps1` 写注册表**，DLL 不导出注册函数） |
+| CLSID | `{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B01}`（勿与 HashTab `{8A56567E-…}`、果核 `{9179448A-…}` 混淆） |
 | 支持扩展 | `.apk .apks .xapk .apkm`（v1）；后续加 `.aab .ipa .hap .appx` 只需注册表指向同一 CLSID，代码按扩展分派 |
 | 输出 | `HBITMAP`（32bpp ARGB，`WTSAT_ARGB`）；建议 256×256 源图缩放到请求尺寸 |
 | 超时 | 300 ms 软上限：超时/异常返回 `E_FAIL`，Explorer 显示默认图标；同一文件 24 h 内不再重试（失败标记） |
@@ -138,7 +141,7 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 
 | 缓存 | 位置 | 键 | 失效 | 上限 |
 | --- | --- | --- | --- | --- |
-| 缩略图 | `%LOCALAPPDATA%\apk-shell-ext\thumbs\` | `sha1(path|size|mtime|解析器版本)` | 文件变化即换键；负缓存 24 h | 200 MB，LRU 清理（worker 或独立 tool） |
+| 缩略图 | `%LOCALAPPDATA%\apk-shell-ext\thumbs\` | 文件模式 `sha1(path\|size\|mtime\|解析器版本)`；流模式 `sha1(name\|size\|mtime\|中央目录 SHA-1\|解析器版本)`（ADR-0005） | 文件变化即换键；负缓存 24 h | 200 MB，LRU 清理（每次写入后按总量自检） |
 | 元数据 JSON | `…\meta\` | 同上 | 同上 | 50 MB |
 | 系统缩略图库 | Explorer 自管 | — | 用户清缓存即失效 | — |
 

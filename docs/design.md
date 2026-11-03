@@ -67,6 +67,15 @@ Windows 给了四个可以"插手"的位置，频率差两个数量级：
 
 > 反例参照：果核看图的 thumb dll 体积只有 364 KB，但它在 explorer 进程里 `LoadLibrary("ghde.dll")`（6.9 MB 解码器）`[实测]`，且动态链接 `MSVCP140.dll` `[实测]`——能用，但把"依赖运行库"和"大模块进桌面进程"两个风险都背上了。我们只在 worker 进程里做等价的事。
 
+> **M1 修订（2026-11-03，证据见 [verification.md R-0002](verification.md)、[ADR-0005](adr/0005-isolated-thumbnail-host-and-stream-input.md)）**：
+> 上面"handler 直接进 explorer 地址空间"这条对**属性页**成立，对**缩略图**不成立——
+> Windows 把缩略图 handler 放进 `dllhost.exe`（COM surrogate）跑，并且只通过
+> `IInitializeWithStream` 喂数据（只实现 `IInitializeWithItem` 时系统直接返回
+> `0x8004B200`，我们的代码根本不执行）。这比原判断更安全（崩的是 dllhost），
+> 但要求实现按"流"工作，而不是按"路径"工作。三条硬规定（静态 CRT / 解析不进 explorer /
+> 异常不跨边界）不变，其中第 2 条在缩略图路径上的含义是：DLL 内只做"中央目录 + 单条目解码"，
+> 全量解析仍在 worker（M2）。
+
 ### P3 冷热分离：缩略图只碰中央目录与图标条目
 
 缩略图请求允许做的最小工作：
