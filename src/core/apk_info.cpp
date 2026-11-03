@@ -9,6 +9,7 @@
 
 #include "core/apk_icon.h"
 #include "core/arsc.h"
+#include "core/arsc_stream.h"
 #include "core/axml.h"
 #include "core/file_util.h"
 #include "core/zip_reader.h"
@@ -89,7 +90,7 @@ std::string DensityName(uint16_t density) {
   }
 }
 
-bool CollectApkInfoFromSource(std::unique_ptr<ByteSource> source, bool want_sha256, ApkInfo* out,
+bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha256, ApkInfo* out,
                               Error* err) {
   (void)want_sha256;  // 哈希要按路径流式读，见 CollectApkInfo
   if (out == nullptr) return false;
@@ -144,25 +145,55 @@ bool CollectApkInfoFromSource(std::unique_ptr<ByteSource> source, bool want_sha2
   out->permissions.assign(perms.begin(), perms.end());
 
   // ---------------------------------------------------------------- 资源表
-  ArscTable table;
+  // 首选流式（TD-001 关闭）：Stored arsc 直接开窗口，按 chunk 跳读；
+  // 只有 deflate 的 arsc 才回退到有界整读（deflate 无法随机访问，见 TD-002）。
+  ArscTable memory_table;
+  ArscStreamTable stream_table;
   bool have_arsc = false;
+  bool streaming = false;
   const ZipEntry* arsc_entry = zip.Find(kArscEntry);
   if (arsc_entry == nullptr) {
     out->warnings.push_back("包内没有 resources.arsc");
-  } else if (arsc_entry->uncompressed_size > kMaxArscRead) {
-    out->warnings.push_back("resources.arsc 超过 8 MB，已跳过（TD-001，M2 后续关闭）");
   } else {
-    std::vector<uint8_t> arsc_bytes;
-    if (zip.Read(*arsc_entry, kMaxArscRead, &arsc_bytes, nullptr)) {
-      have_arsc = table.Parse(arsc_bytes, nullptr);
+    if (auto stored = zip.OpenStoredEntry(*arsc_entry)) {
+      streaming = stream_table.Open(stored, nullptr);
+      have_arsc = streaming;
     }
-    if (!have_arsc) out->warnings.push_back("resources.arsc 解析失败");
+    if (!have_arsc) {
+      if (arsc_entry->uncompressed_size > kMaxArscRead) {
+        out->warnings.push_back(
+            "resources.arsc 被 deflate 且超过 8 MB，已跳过（TD-002：deflate 不支持分段读）");
+      } else {
+        std::vector<uint8_t> arsc_bytes;
+        if (zip.Read(*arsc_entry, kMaxArscRead, &arsc_bytes, nullptr)) {
+          have_arsc = memory_table.Parse(arsc_bytes, nullptr);
+        }
+      }
+    }
+    if (!have_arsc && arsc_entry->uncompressed_size <= kMaxArscRead) {
+      out->warnings.push_back("resources.arsc 解析失败");
+    }
   }
+
+  auto collect_candidates = [&](uint32_t id, std::vector<ArscCandidate>* cands) {
+    if (streaming) {
+      stream_table.CollectCandidates(id, cands);
+    } else if (have_arsc) {
+      memory_table.CollectCandidates(id, cands);
+    }
+  };
+  auto collect_configs = [&](std::vector<ArscConfig>* configs) {
+    if (streaming) {
+      stream_table.CollectConfigs(configs);
+    } else if (have_arsc) {
+      memory_table.CollectConfigs(configs);
+    }
+  };
 
   // label：清单里是资源引用时，取"默认配置"的那条字符串
   if (out->label.empty() && have_arsc && label_res_id != kInvalidResId) {
     std::vector<ArscCandidate> cands;
-    table.CollectCandidates(label_res_id, &cands);
+    collect_candidates(label_res_id, &cands);
     std::sort(cands.begin(), cands.end(), [](const ArscCandidate& x, const ArscCandidate& y) {
       const bool x_def = x.language.empty() && x.country.empty();
       const bool y_def = y.language.empty() && y.country.empty();
@@ -179,7 +210,7 @@ bool CollectApkInfoFromSource(std::unique_ptr<ByteSource> source, bool want_sha2
 
   if (have_arsc) {
     std::vector<ArscConfig> configs;
-    table.CollectConfigs(&configs);
+    collect_configs(&configs);
     std::set<std::string> locales;
     std::set<std::string> densities;
     for (const ArscConfig& c : configs) {
@@ -281,7 +312,7 @@ bool CollectApkInfo(const std::wstring& file, bool want_sha256, ApkInfo* out, Er
 
   // 注意：CollectApkInfoFromSource 会重置结构体，所以文件元数据在它之后再填
   ApkInfo parsed;
-  if (!CollectApkInfoFromSource(std::move(source), false, &parsed, err)) return false;
+  if (!CollectApkInfoFromSource(source, false, &parsed, err)) return false;
   *out = std::move(parsed);
 
   WideToUtf8(file, &out->path);

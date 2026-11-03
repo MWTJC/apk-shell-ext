@@ -268,7 +268,7 @@ class ThumbProvider final : public IThumbnailProvider,
     if (!source) return E_FAIL;
 
     ZipReader zip;
-    if (!zip.OpenSource(std::move(source), nullptr)) return E_FAIL;
+    if (!zip.OpenSource(source, nullptr)) return E_FAIL;
 
     // 流只有裸文件名：缓存键必须带上中央目录摘要，否则同名不同包会串图
     const uint64_t size = (stream_size != 0) ? stream_size : zip.file_size();

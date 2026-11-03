@@ -34,7 +34,7 @@ class ZipReader {
   // 打开文件并解析中央目录；失败时 err 带原因
   bool Open(const std::wstring& path, Error* err);
   // 接管一个数据源（file / stream）
-  bool OpenSource(std::unique_ptr<ByteSource> source, Error* err);
+  bool OpenSource(std::shared_ptr<ByteSource> source, Error* err);
   void Close();
   bool IsOpen() const { return source_ != nullptr; }
 
@@ -45,6 +45,9 @@ class ZipReader {
   // 中央目录的 SHA-1（十六进制）：只有"裸文件名"的 stream 场景用它区分同名文件
   const std::string& cd_digest_hex() const { return cd_digest_; }
 
+  // Stored（未压缩）条目的零拷贝视图；deflate 条目返回 nullptr（TD-001 的流式读靠它）
+  std::shared_ptr<ByteSource> OpenStoredEntry(const ZipEntry& entry) const;
+
   // 解压单条目；limit 为解压后上限（同时用于防御声明值造假的炸弹）
   bool Read(const ZipEntry& entry, uint64_t limit, std::vector<uint8_t>* out, Error* err) const;
 
@@ -53,7 +56,7 @@ class ZipReader {
   bool ParseCentralDirectory(uint64_t cd_offset, uint64_t cd_size, uint32_t expected_entries,
                              Error* err);
 
-  std::unique_ptr<ByteSource> source_;
+  std::shared_ptr<ByteSource> source_;
   uint64_t file_size_ = 0;
   std::vector<ZipEntry> entries_;
   std::string cd_digest_;

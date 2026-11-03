@@ -162,6 +162,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | 编号 | 日期 | 阶段 | 结论 | 证据（命令/输出摘要） | 未验证 |
 | --- | --- | --- | --- | --- | --- |
 | R-0001 | 2026-11-03 | M0 | 文档基线建立；**未做任何代码验证** | 本套文档 | M1 起全部待测 |
+| R-0004 | 2026-11-04 | M2 | **TD-001 关闭**：arsc 改流式跳读，19.7 MB 真表 0.7–1.5 ms、结果与旧路径逐字段一致；大包（1.26 G / 1.92 G）解析 3.8–6.9 ms；修掉一个 `typeIdOffset` 越界导致的静默丢图 | 见 §12 | `signature`/`features`/`splits` 字段、deflate 大 arsc（TD-002） |
 | R-0003 | 2026-11-03 | M2（部分） | `apkinfo.exe --json` 骨架：7/7 包与 `aapt2 dump badging` 的包名/版本/SDK/ABI/权限/名称完全一致；`--hash=sha256` 与 `certutil` 一致；退出码 0/2/3 均实测 | 见 §11 | `signature`/`features`/`splits` 字段、TD-001（arsc 分段读）、500 MB 级大包 |
 | R-0002 | 2026-11-03 | M1 | APK 缩略图闭环打通：**真实 Explorer 大图标视图已出包内图标**（截图存档）；**V1 零开销通过**（详细信息 0 次 vs 大图标 36 次）；解析与 aapt2 一致；8 个坏包优雅失败 | 见下 §10、§1.1、§V4 | V8（libwebp 样本）、长跑（句柄/负缓存过期）、V1 的 30 s 长捕获 |
 
@@ -356,3 +357,65 @@ certutil -hashfile aida64-1.94.apk SHA256
 2. TD-001 仍未关闭：arsc 依然整读（> 8 MB 跳过并降级），M2 的"分段流式"未开工。
 3. "≤ 50 MB 包 P95 ≤ 300 ms / ≤ 500 MB 包 ≤ 1.5 s"这条时限判据没跑：手头最大样本 8.2 MB（9.8 ms，含 sha256）。
 4. 恶意样本（V8）与长跑（句柄泄漏）仍未做。
+
+## 12. R-0004 记录（M2 · TD-001 关闭，2026-11-04）
+
+### 变更
+
+- 新增 `src/core/arsc_stream.{h,cpp}`：在 **Stored** 的 `resources.arsc` 上开只读窗口
+  （`ByteSource::SliceSource`）按 chunk 跳读，不再把整表读进内存。
+- `ZipReader::OpenStoredEntry()`：Stored 条目的零拷贝视图；deflate 条目返回空 → 调用方回退。
+- 数据源所有权 `unique_ptr` → `shared_ptr`（切片需要共享生命周期）。
+- `apk_info` 的语言/密度改为遍历 type chunk 头；label 解析走流式。
+
+### 夹具（可复现）
+
+```
+python tests/gen_big_arsc.py
+  f_bigarsc_real.apk: resources.arsc = 19,714,916 bytes (Stored)   # 4000 条长字符串 × 3 语言
+  tdeflate_arsc.apk : resources.arsc = 1,484 bytes (Deflated)      # TD-002 回退路径
+```
+
+### TD-001 关闭判据对照
+
+| 判据 | 结果 |
+| --- | --- |
+| 分段流式读取，删除整读路径 | Stored 走流式；整读只剩"deflate 且 ≤ 8 MB"的回退分支（TD-002） |
+| ≥ 32 MB 资源表样本仍满足 V2 | 手边最大真表 19.7 MB：`apkinfo` 0.71–1.45 ms、缩略图 33 ms（含首次 WIC 初始化）。**没有 32 MB 的真样本**，用 19.7 MB 佐证，差距在文档里写明 |
+
+19.7 MB 的表只读了几百字节还是几千字节，取决于要枚举多少配置：查图标 = 表头 + 池头 +
+目标 type chunk 头 + 一个条目；枚举语言/密度 = 每个 type chunk 的头（该样本 ~800 个 chunk）。
+
+### 大包测速（新样本，用户提供）
+
+| 样本 | 条目数 | arsc（Stored） | `apkinfo` 解析 | 缩略图（直接） | 缩略图（经 dllhost） |
+| --- | --- | --- | --- | --- | --- |
+| `base_1.26G.apk`（Arcaea 国服 7.2.0） | 5772 | 735 KB | **6.2 ms** | 37 ms | — |
+| `base2_1.92G.apk`（少女前线2 4.0） | 1564 | 1.25 MB | **3.8–5.1 ms**（5 次） | 41 ms | 172 ms |
+
+`--hash=sha256` 单独计：1.92 GB 用 **1.16 s**（磁盘吞吐限制），只在属性页显式请求时发生。
+对照 roadmap 的"≤ 500 MB 包 ≤ 1.5 s"：解析路径 5 ms 级别，余量极大。
+
+### 回归：11 个包与 aapt2 一致
+
+```
+python testserify_apkinfo.py testsixtures\generated\*.apk testsixtureseal\*.apk testsixturesealig\*.apk
+...
+11/11 packages matched
+```
+
+含 `f_bigarsc_real.apk`（19.7 MB 表）、`tdeflate_arsc.apk`（deflate 回退）、两个 GB 级真包。
+
+### 过程中发现并修复的隐蔽 bug
+
+流式读包头时缓冲区只有 256 B，却访问偏移 284 的 `Package.typeIdOffset` —— 越界读到栈垃圾，
+把它当偏移后**该包所有 type id 都对不上**，表现为"图标静默消失、只走启发式"。
+在 `qwxds-1.6.1.apk`（资源名混淆的包）上暴露；修复后该包重新解析出 `res/xC.webp`。
+
+教训：**两套解析器必须同时跑同一批真实包**——只跑自家 aapt2 夹具时这条路径永远是对的。
+
+### 未验证
+
+1. `signature` / `features` / `splits` 仍未实现（M2 剩余部分）。
+2. 没有 ≥ 32 MB 的真 arsc 样本（19.7 MB 是现有上限）。
+3. TD-002（deflate 大 arsc）未解。

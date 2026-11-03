@@ -38,16 +38,16 @@ bool ZipReader::ReadAt(uint64_t offset, void* buffer, size_t length) const {
 bool ZipReader::Open(const std::wstring& path, Error* err) {
   auto source = OpenFileSource(path, err);
   if (!source) return false;
-  return OpenSource(std::move(source), err);
+  return OpenSource(source, err);
 }
 
-bool ZipReader::OpenSource(std::unique_ptr<ByteSource> source, Error* err) {
+bool ZipReader::OpenSource(std::shared_ptr<ByteSource> source, Error* err) {
   Close();
   if (!source) {
     if (err) err->set(L"数据源为空");
     return false;
   }
-  source_ = std::move(source);
+  source_ = source;
   file_size_ = source_->size();
   if (file_size_ < kEocdSize) {
     if (err) err->set(L"文件太小，不是有效 ZIP");
@@ -287,6 +287,22 @@ bool ZipReader::Read(const ZipEntry& entry, uint64_t limit, std::vector<uint8_t>
   }
   out->resize(produced);
   return true;
+}
+
+std::shared_ptr<ByteSource> ZipReader::OpenStoredEntry(const ZipEntry& entry) const {
+  if (!source_ || entry.method != 0) return nullptr;
+  if ((entry.flags & 0x0001u) != 0) return nullptr;  // 加密条目不解
+
+  uint8_t local[30] = {};
+  if (!ReadAt(entry.local_header_offset, local, sizeof(local)) || le32(local) != kSigLocalHeader) {
+    return nullptr;
+  }
+  const uint64_t data_offset =
+      entry.local_header_offset + 30u + le16(local + 26) + le16(local + 28);
+  if (data_offset > source_->size() || entry.uncompressed_size > source_->size() - data_offset) {
+    return nullptr;
+  }
+  return SliceSource(source_, data_offset, entry.uncompressed_size);
 }
 
 }  // namespace apksx

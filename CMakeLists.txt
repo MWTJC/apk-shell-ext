@@ -55,6 +55,7 @@ add_library(apksx_core STATIC
   src/core/byte_source.cpp
   src/core/axml.cpp
   src/core/arsc.cpp
+  src/core/arsc_stream.cpp
   src/core/apk_icon.cpp
   src/core/apk_info.cpp
   src/core/wic_image.cpp

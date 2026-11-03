@@ -56,7 +56,7 @@ struct ApkInfo {
 bool CollectApkInfo(const std::wstring& file, bool want_sha256, ApkInfo* out, Error* err);
 
 // 已打开的数据源版本（将来给管道/流用）
-bool CollectApkInfoFromSource(std::unique_ptr<ByteSource> source, bool want_sha256, ApkInfo* out,
+bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha256, ApkInfo* out,
                               Error* err);
 
 // 密度的数值 → 名字（ldpi/mdpi/.../anydpi/nodpi）

@@ -4,7 +4,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 已完成（R-0002）；M2 进行中**（`apkinfo.exe --json` 骨架已可用，签名块与 TD-001 未做） |
+| 阶段 | **M1 已完成（R-0002）；M2 进行中**（`apkinfo.exe --json` 可用；**TD-001 已关闭**；签名块未做） |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
 | 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，🟡 骨架可用）· `apkprop.dll`（属性页，M3） |
 | 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |

@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "core/arsc.h"
+#include "core/arsc_stream.h"
 #include "core/axml.h"
 #include "core/log.h"
 #include "core/zip_reader.h"
@@ -140,6 +141,34 @@ bool ParseManifestElements(const std::vector<AxmlElement>& elements, ManifestInf
 
 namespace {
 
+
+// 资源 ID → 候选（跟随一层 @ref），内存表与流式表共用
+template <typename CollectFn>
+void CollectIconCandidates(CollectFn collect, uint32_t icon_res_id,
+                           std::vector<ArscCandidate>* out) {
+  uint32_t pending_id = icon_res_id;
+  for (int depth = 0; depth < 4 && pending_id != kInvalidResId; ++depth) {
+    std::vector<ArscCandidate> cands;
+    collect(pending_id, &cands);
+
+    bool followed = false;
+    for (const ArscCandidate& c : cands) {
+      if (c.value_type == kResTypeReference && !c.is_bag && c.value_data != 0) {
+        pending_id = c.value_data;
+        followed = true;
+        break;
+      }
+    }
+    if (followed) continue;
+
+    for (ArscCandidate& c : cands) {
+      if (c.value_type != kResTypeString || c.value_string.empty()) continue;
+      out->push_back(std::move(c));
+    }
+    break;
+  }
+}
+
 bool ParseManifestBytes(const std::vector<uint8_t>& bytes, ManifestInfo* out, Error* err) {
   std::vector<AxmlElement> elements;
   if (!ParseAxml(bytes, &elements, err)) return false;
@@ -199,41 +228,41 @@ bool LocateIconInZip(const ZipReader& zip, const ManifestInfo& info, IconLocatio
   }
 
   // --- 2) 资源 ID → resources.arsc
+  // 优先流式（TD-001）：arsc 通常是 Stored，直接在文件上开窗口按需读；
+  // 只有 deflate 的 arsc 才回退到有界整读。
   std::vector<ArscCandidate> resolved;
   if (info.icon_res_id != kInvalidResId) {
     const ZipEntry* arsc_entry = zip.Find(kArscEntry);
-    if (arsc_entry != nullptr && arsc_entry->uncompressed_size <= kMaxArscRead) {
-      std::vector<uint8_t> arsc_bytes;
-      if (zip.Read(*arsc_entry, kMaxArscRead, &arsc_bytes, nullptr)) {
-        ArscTable table;
-        if (table.Parse(arsc_bytes, nullptr)) {
-          uint32_t pending_id = info.icon_res_id;
-          for (int depth = 0; depth < 4 && pending_id != kInvalidResId; ++depth) {
-            std::vector<ArscCandidate> cands;
-            table.CollectCandidates(pending_id, &cands);
-
-            // 跟随一层引用（如 @color / @drawable → 另一个资源）
-            bool followed = false;
-            for (const ArscCandidate& c : cands) {
-              if (c.value_type == kResTypeReference && !c.is_bag && c.value_data != 0) {
-                pending_id = c.value_data;
-                followed = true;
-                break;
-              }
-            }
-            if (followed) continue;
-
-            for (ArscCandidate& c : cands) {
-              if (c.value_type != kResTypeString || c.value_string.empty()) continue;
-              resolved.push_back(std::move(c));
-            }
-            break;
+    if (arsc_entry != nullptr) {
+      if (auto stored = zip.OpenStoredEntry(*arsc_entry)) {
+        ArscStreamTable table;
+        if (table.Open(stored, nullptr)) {
+          CollectIconCandidates(
+              [&table](uint32_t id, std::vector<ArscCandidate>* out) {
+                table.CollectCandidates(id, out);
+              },
+              info.icon_res_id, &resolved);
+          DebugLogf(L"arsc streaming: %llu bytes table, %zu candidates",
+                    static_cast<unsigned long long>(table.size()), resolved.size());
+        }
+      } else if (arsc_entry->uncompressed_size <= kMaxArscRead) {
+        std::vector<uint8_t> arsc_bytes;
+        if (zip.Read(*arsc_entry, kMaxArscRead, &arsc_bytes, nullptr)) {
+          ArscTable table;
+          if (table.Parse(arsc_bytes, nullptr)) {
+            CollectIconCandidates(
+                [&table](uint32_t id, std::vector<ArscCandidate>* out) {
+                  table.CollectCandidates(id, out);
+                },
+                info.icon_res_id, &resolved);
           }
         }
-        if (deadline != nullptr && deadline->expired()) {
-          if (err) err->set(L"解析资源表超时");
-          return false;
-        }
+      } else {
+        DebugLogf(L"arsc is deflated and > 8 MB, skipped (TD-002)");
+      }
+      if (deadline != nullptr && deadline->expired()) {
+        if (err) err->set(L"解析资源表超时");
+        return false;
       }
     }
   }

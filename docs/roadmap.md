@@ -19,7 +19,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
-| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON 骨架 + aapt2 交叉校验已过；签名块与 TD-001 未做 |
+| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON 骨架 + aapt2 交叉校验通过；**TD-001 已关闭**；签名块未做 |
 | M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | ⬜ |
 | M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
@@ -92,11 +92,26 @@ flowchart LR
    这是 M1 最重要的发现：只实现 `IInitializeWithItem` 时 Explorer 管线直接失败（`0x8004B200`）。
 2. **工具链用 MSVC 14.51（VS 18 Community）+ Ninja**，而非 ADR-0004 写的 v143 + VS 生成器：
    本机没有 VS2022 生成器，CMake 3.31 也不认 VS 18 生成器；`/MT`、`/W4 /WX`、`/guard:cf` 等约束不变。
-3. **TD-001 仍然在**：`resources.arsc` 仍整读（≤ 8 MB，超限回落启发式，实测 64 MB 资源表也能出图）。M2 关闭。
+3. **TD-001 已在 M2 关闭**（2026-11-04）：改为对 Stored 的 arsc 流式跳读；19.7 MB 真表 0.7–1.5 ms。
+   遗留项是 deflate 的大 arsc（TD-002）。
 4. adaptive icon 在本阶段用"同名光栅回退"，不做图层合成（原计划 M2 合成）。
 
 验收数字见 [verification.md §10](verification.md)：冷 P50 8.2 ms / P95 14.9 ms（100 个包），
 热 P50 1.3 ms；真实 Explorer 管线冷 12–21 ms（首次含 dllhost 启动 100–160 ms）。
+
+**M2 实施记录（2026-11-04）**
+
+- `src/core/arsc_stream.{h,cpp}`：流式 arsc。表头 → 全局字符串池头 → 包列表只读头部；
+  查资源时只读目标 type chunk 的**头**（≤256 B）+ 单个条目偏移 + 条目值；取字符串时只读
+  池偏移表一项 + 该字符串。deflate 的 arsc 无法随机寻址 → 回退有界整读（TD-002）。
+- `src/core/byte_source`：新增 `SliceSource`（父源上的只读窗口），`ZipReader::OpenStoredEntry`
+  给 Stored 条目零拷贝视图；`srccore` 所有权从 `unique_ptr` 改为 `shared_ptr`。
+- `src/core/apk_info`：语言/密度改为遍历 type chunk 头（不再依赖整表），label 解析走流式。
+- 夹具：`tests/gen_big_arsc.py` 生成 19.7 MB 真 arsc（4000 长字符串 × 3 语言 → Stored），
+  外加 `tdeflate_arsc.apk`（同一张表以 Deflate 重打包，用来验证回退路径）。
+- **顺带修掉的隐蔽 bug**：流式包头只读了 256 字节却访问偏移 284 的 `typeIdOffset`，
+  越界垃圾让该包的 type 全部对不上号 —— 表现是"图标静默消失、只走启发式"。
+  在 `qwxds-1.6.1.apk`（混淆包）上暴露，修复后 11/11 包与 aapt2 一致。
 
 **风险 / 已批准的技术债**：ARSC 分段读的实现复杂度高于预期 → M1 先"整读 `resources.arsc`（≤ 8 MB；超限回落文件名启发式）"，登记为 **TD-001**（见 §5），M2 必须关闭。该债已于 2026-11-03 获批准。
 
@@ -191,7 +206,8 @@ flowchart LR
 
 | 编号 | 内容 | 引入阶段 | 影响 | 关闭条件 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| TD-001 | 缩略图路径**整读** `resources.arsc`（上限 8 MB，超限回落"按文件名猜 mipmap"） | M1 | 大资源表的包首次出图变慢（仍受 300 ms 超时保护）；内存瞬时多占 ≤ 8 MB | M2 改分段流式读取并删除整读路径；≥ 32 MB 资源表样本仍满足 V2 | 已批准（2026-11-03），**未关闭** |
+| TD-001 | 缩略图路径**整读** `resources.arsc`（上限 8 MB，超限回落"按文件名猜 mipmap"） | M1 | 大资源表的包首次出图变慢（仍受 300 ms 超时保护）；内存瞬时多占 ≤ 8 MB | M2 改分段流式读取并删除整读路径；≥ 32 MB 资源表样本仍满足 V2 | ✅ **已关闭（2026-11-04）**：Stored 的 arsc 改为在文件上开窗口、按 chunk 跳读（`src/core/arsc_stream.cpp`）；19.7 MB 真表 0.7–1.5 ms；细节见 [verification.md R-0004](verification.md) |
+| TD-002 | **deflate** 的 `resources.arsc` 且 > 8 MB 时仍会跳过（deflate 流不可随机寻址） | M2 | 这类包的名称/语言/密度可能缺失，图标回落启发式 | 实现可重定位的流式解压（或先解压到临时文件并由限额保护） | 新增（2026-11-04），未关闭。实测真实包几乎都是 Stored |
 
 ## 6. 风险登记
 
