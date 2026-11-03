@@ -281,7 +281,7 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
 
     const std::wstring sha = StrField(file, "sha256");
     if (sha.empty()) {
-      AddActionRow(&files, L"SHA-256", L"点击计算");
+      AddActionRow(&files, L"SHA-256", L"未计算");
     } else {
       AddRow(&files, L"SHA-256", sha);
     }

@@ -82,7 +82,8 @@ flowchart LR
 
 **M3 实施补充（2026-11-04）**
 
-- 页面是**全自绘**（`src/propsheet/page_view.cpp`），模板里零控件；深色与 DPI 全在自己手里。
+- 页面是**原生控件组合**（`STATIC` 头 + `SysListView32` 两列 + `BUTTON` 底栏），模板里零控件、代码创建；
+  配色/深色/选中/无障碍交给系统（2026-11-04 由全自绘改来，见 `docs/m3-property-page.md` §16）。
 - 参数经 `IShellExtInit::Initialize` 的 `CF_HDROP` 与 `IPersistFile::Load` **两条路都接**：前者是这个 build 的必经之路，
   后者保证其它宿主（脚本/测试工具）也能用。
 - worker 挂在 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job 上：页面一关，job 句柄一关，worker 立刻消失；

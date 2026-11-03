@@ -206,7 +206,7 @@ function Uninstall-Handler {
 
 function Install-PropsheetHandler {
     if (-not (Test-Path -LiteralPath $PropDllPath)) {
-        throw "apkprop.dll not found at $PropDllPath (run toolsuild.cmd first, or pass -DllDir)"
+        throw "apkprop.dll not found at $PropDllPath (run tools\build.cmd first, or pass -DllDir)"
     }
     $dllFull = (Resolve-Path -LiteralPath $PropDllPath).Path
 

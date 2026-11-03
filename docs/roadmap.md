@@ -215,7 +215,7 @@ flowchart LR
 | 交付项 | 状态 |
 | --- | --- |
 | `IShellPropSheetExt` + `IPersistFile` + **`IShellExtInit`**（后者是这个 build 的硬要求） | ✅ |
-| 全自绘单页（4 组字段、展开、滚动、复制、快捷键） | ✅ |
+| 单页（4 组字段、分组行、复制、快捷键；原生 ListView 实现） | ✅ |
 | 异步：`AddPages` 零 IO → 线程 → Job 里的 `apkinfo.exe` → `WM_APP` 回填 | ✅ |
 | 错误态（缺 worker / 退出码 2 / 超时 / 崩溃 / 输出异常 / 不支持的格式） | ✅ 页内文案 + 重试 |
 | 按需 SHA-256（按钮） | ✅ 172 ms（7.9 MB）/ ~1.2 s（1.9 GB） |

@@ -76,7 +76,7 @@
 
 | 方案 | 深色 | 高 DPI | 复制/选择 | 无障碍 | 预计代码量 |
 | --- | --- | --- | --- | --- | --- |
-| A1 全自绘（**推荐**） | 完全可控 | 完全可控 | 自己实现（命中测试 + 剪贴板） | 弱（只做 `WM_GETOBJECT` 之外的最小提示） | ~600 行 |
+| A1 全自绘（~~推荐~~ 已在 §16 被否决） | 完全可控 | 完全可控 | 自己实现（命中测试 + 剪贴板） | 弱（只做 `WM_GETOBJECT` 之外的最小提示） | ~600 行 |
 | A2 `SysListView32` report + ownerdraw | 需要 `SetWindowTheme("DarkMode_Explorer")`，表头/边框仍有白边 | 可 | 现成（多选、Ctrl+C 要自己挂） | 好 | ~400 行 + 主题补丁 |
 | A3 标准 Static + 只读 Edit 拼装 | 每个控件都要 `WM_CTLCOLORSTATIC` 单独处理，滚动要自己做 | 可 | 现成 | 好 | ~350 行但观感最差 |
 
@@ -293,7 +293,7 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 1. 无障碍：自绘列表对 Narrator 不友好（§13 P1 已登记，v1 接受）。
 2. **150% / 200% DPI 未实测**（当前机器 100%）；页内跟窗口的一致性已截图为证（系统深色时页内仍是浅色）。
 3. 100 次开关的句柄趋势未做（10 次已做，见 R-0006）；`worker 崩溃` 用标志文件钩子验证通过
-   （`%TEMP%pk-shell-ext.test-abort.on` → `ExitProcess(0xC0000005)`）。
+   （`%TEMP%\pk-shell-ext.test-abort.on` → `ExitProcess(0xC0000005)`）。
 4. 中英文双语只做了中文文案；`.rc` 的 STRINGTABLE 留了 ID，英文在 M5 一起做。
 
 ## 15. 重绘策略（2026-11-04 快速划过闪烁后补）
@@ -304,3 +304,49 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 - **tooltip**：悬停停留 600 ms 才出现，且只在"该行确实被省略号截断"时出现
   （`PageView::ItemTruncated`，绘制时量文字宽度），不再按字符数猜；`WM_MOUSELEAVE` 立即隐藏。
 - 实测数字见 [verification.md R-0008](verification.md)：单次 hover 重绘从整窗 229k px 降到两行 22k px。
+
+## 16. 决策反转：视图层改用原生控件（2026-11-04）
+
+### 为什么改
+
+第一版按 §8 的 A1 做了全自绘（`page_view.cpp`，约 400 行绘制 + 命中测试）。用户看过之后提出两点：
+
+1. 页内跟随了亮暗，**属性窗口本体没跟随**——说明"自己决定页内样式"这条路本身就是问题；
+2. 快速划过会闪，需要双缓冲 + 脏矩形去补。
+
+用户的原话是：这种嵌入现有面板的实现，**自绘制不应该是首选**；目标是"尽可能以属性窗口自己的风格完成页内内容，
+亮暗这一层交给系统"。所以不是去优化自绘，而是换掉它。
+
+### 现在是什么
+
+| 层 | 控件 | 说明 |
+| --- | --- | --- |
+| 头部 | `STATIC` ×4 + `SS_BITMAP` 图标 | 名称（加粗）/ 包名 / 版本；没有图标时整块隐藏 |
+| 主体 | `SysListView32`（report） | 两列「属性 / 值」+ **系统分组**（`LVM_INSERTGROUP`），等同"详细信息"页的形态 |
+| 底栏 | `BUTTON` ×3 + `STATIC` | 计算 SHA-256 / 复制全部为 JSON / 重试（仅错误时出现）+ 状态文字 |
+
+列表样式：`LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS`，扩展 `LVS_EX_FULLROWSELECT |
+LVS_EX_INFOTIP | LVS_EX_LABELTIP | LVS_EX_DOUBLEBUFFER`。
+
+**删掉的东西**：`page_view.{h,cpp}`（绘制、命中测试、双缓冲、`ItemTruncated`、tooltip 计时器全部不再需要）；
+`PageTheme` 里的颜色令牌也删了，只剩 DPI 与字体。
+
+### 换来了什么
+
+- 配色/深色：由系统与宿主决定，页内不再有自己的颜色表；
+- 选中、滚动条、键盘（Tab/方向键/Home/End）、无障碍（Narrator 读得到）都是系统行为；
+- 截断的 tooltip 由 `LVS_EX_INFOTIP` 提供，不需要自己量宽度、也不需要跟手；
+- 行高、字体、DPI 缩放全部跟随系统。
+
+我们只保留：右键菜单（复制值 / 复制"属性: 值" / 复制全部为 JSON）、双击复制、`Ctrl+C` 复制。
+
+### 细节决定
+
+1. **哈希改成真按钮**：原来是"点那一行"的自绘动作行，现在列表是纯展示，动作交给底栏按钮；
+   算完后自动 `ListView_EnsureVisible` 到 `SHA-256` 那一行并选中，结果就在眼前。
+2. **权限/特性明细**：在父行（`权限  6 项`）下面逐条列出，文本放在**值列**（键列只有 96 DIP，放长包名会截断）。
+3. **列表分组标题需要 comctl32 v6**：分组带（`应用 / 技术 / 权限与组件 / 文件与签名`）由系统画，
+   宿主进程要激活 v6 清单。资源管理器有，PowerShell 5.1 没有——所以截图证据要分两个宿主（见 verification R-0009）。
+4. **列宽按列表自身客户区算**：`96 DIP` 键列 + 剩余宽度，预留竖直滚动条，避免出现多余的横向滚动条。
+5. **DPI/主题变化**：`WM_DPICHANGED / WM_SETTINGCHANGE / WM_SYSCOLORCHANGE / WM_THEMECHANGED`
+   重新向宿主要字体并重排；控件自己会按新主题重画。

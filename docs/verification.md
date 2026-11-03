@@ -679,6 +679,9 @@ powershell -File tools\capture-propsheet.ps1 -ApkPath aida64-1.94.apk -HoverSwee
 | 绘制目标 | 窗口 DC（可见中间态） | 内存位图 → 一次 BitBlt |
 | 40 步扫动产生的 WM_PAINT | 每次跨行一次整窗 | 26 次，其中 24 次是 1–2 行的小区域 |
 
+> **后续（R-0009）**：R-0008 里"自绘 + 双缓冲 + 脏矩形 + 自己量截断 tooltip"这一整层，
+> 已随视图层改为原生控件而删除；闪烁问题从根上消失。本节保留为历史记录。
+
 tooltip：日志显示 `trunc=1 → TTM_TRACKACTIVATE=1`（长度 97 字符的证书主题），
 说明"被截断才提示、停留后才出现"的逻辑成立；**popup 气泡本身看不进窗口截图**（`CopyFromScreen` 只取对话框矩形），
 需要人眼确认——已列为未验证。
@@ -693,3 +696,76 @@ tooltip：日志显示 `trunc=1 → TTM_TRACKACTIVATE=1`（长度 97 字符的�
 1. 120 Hz / 高刷屏上的主观观感（只能人眼看）。
 2. tooltip 气泡的可见性（API 成功，截图抓不到 popup）。
 3. 滚动时的整窗重绘仍走双缓冲全量画；大内容（几百行）没有做"只画可见行"的裁剪优化，当前数据集最多几十行，够用。
+
+## 17. R-0009 记录（M3 · 视图层改为原生控件，2026-11-04）
+
+### 触发
+
+用户看过自绘版后指出：属性窗口本体不跟随亮暗、快速划过会闪；并明确"这种嵌入现有面板的实现，自绘制不应该是首选"，
+希望直接借用"详细信息"页那种两列表的形态。
+
+### 改了什么
+
+- 删除 `src/propsheet/page_view.{h,cpp}`（绘制、命中测试、双缓冲、tooltip 计时器）。
+- 新增 `src/propsheet/page_list.{h,cpp}`：`ConfigureListView` / `ApplyListColumns` / `PopulateListView` /
+  `FindListRowByKey` / `ScrollListRowIntoView`。
+- `prop_page.cpp` 重写为原生控件装配：`STATIC` 头部（32 DIP 图标 / 名称 / 包名 / 版本）+ `SysListView32`
+  （两列 + 系统分组）+ `BUTTON`（计算 SHA-256 / 复制全部为 JSON / 重试）+ `STATIC` 状态。
+- `theme.{h,cpp}` 只留 DPI 与字体（颜色令牌删除）；`apkprop.rc` 去掉页面级 `WS_VSCROLL`（滚动归列表）。
+- 交互：右键菜单、双击复制、`Ctrl+C` 复制；哈希完成自动滚到 `SHA-256` 行并选中。
+
+### 验收
+
+```
+MSYS_NO_PATHCONV=1 cmd.exe /c "tools\uild.cmd Release"      # 干净，/W4 /WX 无警告
+out/x64/propsheet_model_test.exe --selftest                   # 全 ok
+python tests/verify_apkinfo.py tests/fixtures/generated/*.apk  # 6/6 matched
+python tests/verify_signature.py --glob "tests/fixtures/generated/signed/*.apk"  # 3/3 matched
+out/x64/thumbtest.exe --dir tests/fixtures/generated --repeat 1  # 仅 f_noicon.apk 失败（R-0003 已登记为预期）
+```
+
+页面截图（宿主 = PowerShell 5.1，comctl32 v5 → 无分组带、控件是 v5 外观，但布局/交互是真实页面）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `docs/evidence/m3-native-page.png` | 正常页：头部 + 两列列表 + 底栏按钮，状态"解析完成 · 157 ms" |
+| `docs/evidence/m3-native-hash.png` | 点「计算 SHA-256」后自动滚到该行并选中，摘要带省略号，状态"哈希已计算（156 ms）" |
+| `docs/evidence/m3-native-error.png` | `notzip.apk`：错误说明两行 + 「重试」出现 + 「复制全部为 JSON」置灰 |
+
+v6 渲染证据（`comctl32 v6` 需要宿主清单；explorer 有、PowerShell 5.1 没有）：
+
+```
+out/x64/apkinfo.exe --json <apk> > aida.json
+out/x64/proptest.exe --list-json aida.json --capture docs/evidence/m3-native-groups.png
+```
+
+该截图里分组带 `应用 / 技术 / 权限与组件 / 文件与签名` 正常显示、列表是 Windows 11 主题外观。
+
+### 过程中踩到的坑（都已修）
+
+1. **`DWLP_USER` 类型不一致导致 AV**：`WM_INITDIALOG` 存的是 `PropPage*`，视图函数却按 `PageState*` 解释，
+   打开属性页时 `powershell.exe` 在 `apkprop.dll+0x87d5` 崩溃（事件日志 `0xc0000005`）。
+   现在 `DWLP_USER` 只放 `PageState*`，组件对象由 `PageState::owner` 回指，`WM_DESTROY` 里先 `shared_from_this()` 保活再 `Release()`。
+2. **多余横向滚动条**：列宽按页面宽度算时没扣列表自身客户区（`WS_EX_CLIENTEDGE` 2px×2），
+   改成按 `GetClientRect(list)` 计算并预留竖直滚动条。
+3. **无图标时显示空框**：`SS_BITMAP` 静态控件拿到空位图会画一个白框，改为没有图标就 `SW_HIDE`。
+4. **截图工具的时间线错了**：`-WaitMs` 的等待在点击之后，导致点击发生在解析还没完成时（哈希按钮还没显示）。
+   已把等待移到所有交互之前，末尾只留 150 ms。
+5. **`capture-propsheet.ps1` 必须保持纯 ASCII**：PowerShell 5.1 按 ANSI 解码无 BOM 的脚本，
+   写中文注释会让紧随其后的 `switch` 块解析失败（报"意外标记 {"）。脚本头部早有这条约定，这次又验证了一遍。
+6. **跨进程 `BM_CLICK` 不生效**：给页内按钮发 `BM_CLICK` 拿不到 `WM_COMMAND`；
+   改成直接向页面对话框发 `WM_COMMAND(id)`（`-InvokeButton hash|copy|retry`），实测 `WM_COMMAND id=1002` 正常到达。
+7. **`SetForegroundWindow` 抢不到前台**：合成鼠标事件会打到别的窗口（外层的 Hermes 窗口在前），
+   截图工具改成临时 `SetWindowPos(HWND_TOPMOST)` 再交互。
+
+### 未验证
+
+1. 资源管理器真实宿主下的 v6 外观（分组带）——只能人眼看；v6 渲染已用 `proptest --list-json` 单独证明。
+2. 150% / 200% DPI 下的排版（只测了 100%）。
+3. 深色系统主题下控件是否全部跟随（控件交给系统，但没有截图证据）。
+4. 权限 60+ 条的包：列表会很长，滚动是否顺手只能主观判断。
+
+### 遗留
+
+- `proptest.exe` 直接 `PropertySheetW` 仍返回 `-1`（已确认 `WM_INITDIALOG` 从未被调用，`InitCommonControlsEx` 与 v6 清单都已加）。
+  目前按"不走属性表"的 `--list-json` 模式做渲染验证；真实页面走 explorer 路径，不影响交付。

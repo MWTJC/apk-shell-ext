@@ -1,17 +1,18 @@
-// `apkprop.dll` 的全部窗口逻辑：IShellPropSheetExt + IPersistFile + 自绘属性页。
+// `apkprop.dll` 的窗口逻辑：IShellPropSheetExt + IPersistFile + IShellExtInit。
 //
-// 生命周期（docs/m3-property-page.md §4）：
-//   AddPages  → 只登记页面（零 IO），AddRef 自己等 WM_DESTROY 时 Release
-//   WM_INITDIALOG → 建骨架 → 起线程 → SetWindowLongPtr(DWLP_USER, PageState*)
-//   线程     → apkinfo.exe（Job 里）→ 解析 JSON 成 PageModel → PostMessage(WM_APP+n)
-//   WM_APP+n → UI 线程收模型，重排 + 重画
-//   WM_DESTROY → cancel=true + hwnd=nullptr（都在 state->mutex 里），线程自己收尾
+// 2026-11-04 重构（用户：嵌入现有面板时自绘不是首选）：
+//   页面全部用**原生控件**——STATIC（图标/名称/包名/版本/状态）+ SysListView32
+//   （两列「属性/值」+ 系统分组，等同资源管理器"详细信息"页的形态）+ BUTTON。
+//   因此这里没有任何自绘代码：配色、选中、滚动、截断 tooltip、键盘、无障碍都交给系统；
+//   本文件只做「建控件 + 排版 + 起 worker + 塞数据 + 复制」。
+//
+// 生命周期：AddPages 只登记页面；WM_INITDIALOG 建控件并起线程；线程跑 apkinfo.exe 后
+// PostMessage 回填；WM_DESTROY 置取消并放掉 Job（worker 随之被杀）。
 #include "propsheet/apkprop.h"
 
 #include <windows.h>
-#include <shellapi.h>
-#include <windowsx.h>
 #include <commctrl.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -32,8 +33,8 @@
 #include "core/thumb_cache.h"
 #include "core/wic_image.h"
 #include "core/zip_reader.h"
+#include "propsheet/page_list.h"
 #include "propsheet/page_model.h"
-#include "propsheet/page_view.h"
 #include "propsheet/theme.h"
 #include "propsheet/worker_client.h"
 
@@ -42,12 +43,21 @@ namespace {
 constexpr UINT kMsgInfoDone = WM_APP + 1;
 constexpr UINT kMsgHashDone = WM_APP + 2;
 
-constexpr UINT_PTR kTooltipTimerId = 1;
-constexpr UINT kTooltipDwellMs = 600;      // 悬停多久才出 tooltip（原生行为）
+// 控件 ID（全部代码创建，不需要改 .rc 模板）
+constexpr int kIdList = 1001;
+constexpr int kIdHash = 1002;
+constexpr int kIdCopyJson = 1003;
+constexpr int kIdRetry = 1004;
+constexpr int kIdStatus = 1005;
+constexpr int kIdIcon = 1006;
+constexpr int kIdLabel = 1007;
+constexpr int kIdPackage = 1008;
+constexpr int kIdVersion = 1009;
+constexpr int kIdSeparator = 1010;
 
-constexpr int kMenuCopyValue = 1001;
-constexpr int kMenuCopyPair = 1002;
-constexpr int kMenuCopyJson = 1003;
+constexpr int kMenuCopyValue = 2001;
+constexpr int kMenuCopyPair = 2002;
+constexpr int kMenuCopyJson = 2003;
 
 std::wstring FileNameOf(const std::wstring& path) {
   const size_t slash = path.find_last_of(L"\\/");
@@ -74,10 +84,7 @@ bool CopyTextToClipboard(HWND hwnd, const std::wstring& text) {
   return ok;
 }
 
-// 头部图标：
-//   1) 先读自建缩略图缓存（命中就不碰原文件）；
-//   2) 未命中时在小工作线程里解一个图标条目 —— 与 apkthumb 同一套 core 代码，
-//      只读中央目录 + 一个条目，不做全量解析（ADR-0003 的边界仍然成立）。
+// 头部图标：缩略图缓存优先；否则在小工作线程里解一个图标条目（只读清单 + 一个条目）
 HBITMAP DecodeIconFromZip(const std::wstring& path, int size) {
   apksx::ZipReader zip;
   apksx::Error err;
@@ -116,11 +123,13 @@ HBITMAP LoadHeaderIcon(const std::wstring& path, int size) {
   return DecodeIconFromZip(path, size);
 }
 
+class PropPage;
+
 struct PendingResult {
   enum class Kind { Info, Hash };
   Kind kind = Kind::Info;
   apksx::PageModel model;
-  HBITMAP icon = nullptr;  // 所有权转交给 UI 线程
+  HBITMAP icon = nullptr;
   std::wstring sha256;
   bool ok = false;
   std::wstring footer;
@@ -129,11 +138,21 @@ struct PendingResult {
 
 struct PageState : std::enable_shared_from_this<PageState> {
   HWND hwnd = nullptr;
-  HWND tooltip = nullptr;
+  HWND list = nullptr;
+  HWND icon_view = nullptr;
+  HWND label_view = nullptr;
+  HWND package_view = nullptr;
+  HWND version_view = nullptr;
+  HWND separator = nullptr;
+  HWND status_view = nullptr;
+  HWND hash_button = nullptr;
+  HWND copy_button = nullptr;
+  HWND retry_button = nullptr;
+
   std::wstring path;
   std::wstring file_name;
 
-  std::mutex mutex;  // 保护 hwnd / pending（线程与 UI 线程共享）
+  std::mutex mutex;
   std::unique_ptr<PendingResult> pending;
   std::atomic<bool> cancel{false};
 
@@ -141,43 +160,26 @@ struct PageState : std::enable_shared_from_this<PageState> {
   bool hash_running = false;
   bool info_ok = false;
 
+  PropPage* owner = nullptr;  // 组件对象；WM_DESTROY 时用它放掉 AddPages 里的 AddRef
+
   apksx::PageModel model;
   apksx::PageTheme theme;
-  apksx::PageView view;
   HBITMAP icon = nullptr;
-
-  int scroll_y = 0;
-  int hot = -1;
-  int selected = -1;
-  bool tracking_mouse = false;
-  bool hand_cursor = false;
-  int last_mouse_x = 0;
-  int last_mouse_y = 0;
-  bool tooltip_visible = false;
-
-  // 双缓冲：只在尺寸变化时重建（快速划过时每秒几十次重绘也不会闪）
-  HDC buffer_dc = nullptr;
-  HBITMAP buffer_bitmap = nullptr;
-  int buffer_width = 0;
-  int buffer_height = 0;
   std::wstring footer = L"正在解析…";
   std::string raw_json;
-  ULONGLONG started_ms = 0;
 
-  // UI 线程用：安全地读 hwnd（可能已被 WM_DESTROY 清掉）
   HWND Window() {
     std::lock_guard<std::mutex> guard(mutex);
     return hwnd;
   }
 };
 
-void Relayout(HWND hwnd, PageState* state);
-void UpdateScrollbar(HWND hwnd, PageState* state);
+void Relayout(HWND hwnd);
+void RefreshView(HWND hwnd);
 
 // ------------------------------------------------------------------ 线程侧
 
 void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring path) {
-  // WIC（图标解码）需要 COM；线程自己初始化，不依赖 explorer 的套间
   const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   const ULONGLONG started = ::GetTickCount64();
@@ -192,12 +194,11 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
 
   if (state->cancel.load() || output.status == apksx::WorkerStatus::Cancelled) {
     if (SUCCEEDED(com)) ::CoUninitialize();
-    return;  // 页面已关：模型、图标都不需要了
+    return;
   }
 
   auto result = std::make_unique<PendingResult>();
   result->kind = want_hash ? PendingResult::Kind::Hash : PendingResult::Kind::Info;
-
   const ULONGLONG elapsed = ::GetTickCount64() - started;
 
   if (output.status == apksx::WorkerStatus::Ok) {
@@ -206,34 +207,26 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
     if (!apksx::json::Parse(output.stdout_text, &doc, &err) || doc == nullptr) {
       output.status = apksx::WorkerStatus::BadOutput;
       output.message = L"解析输出不是合法 JSON";
-    } else {
-      if (want_hash) {
-        const apksx::json::Value* file = doc->Find("file");
-        const apksx::json::Value* sha = file == nullptr ? nullptr : file->Find("sha256");
-        if (sha != nullptr && sha->is_string()) {
-          std::wstring wide;
-          if (apksx::Utf8ToWide(sha->as_string(), &wide)) {
-            result->sha256 = wide;
-            result->ok = true;
-          }
-        }
-        if (!result->ok) {
-          output.status = apksx::WorkerStatus::BadOutput;
-          output.message = L"哈希计算没有返回 sha256";
-        }
+    } else if (want_hash) {
+      const apksx::json::Value* file = doc->Find("file");
+      const apksx::json::Value* sha = file == nullptr ? nullptr : file->Find("sha256");
+      std::wstring wide;
+      if (sha != nullptr && sha->is_string() && apksx::Utf8ToWide(sha->as_string(), &wide)) {
+        result->sha256 = wide;
+        result->ok = true;
       } else {
-        if (apksx::BuildPageModel(*doc, state->file_name, &result->model, &err)) {
-          result->ok = true;
-        } else {
-          output.status = apksx::WorkerStatus::BadOutput;
-          output.message = L"解析输出结构不认识";
-        }
+        output.status = apksx::WorkerStatus::BadOutput;
+        output.message = L"哈希计算没有返回 sha256";
       }
+    } else if (apksx::BuildPageModel(*doc, state->file_name, &result->model, &err)) {
+      result->ok = true;
+    } else {
+      output.status = apksx::WorkerStatus::BadOutput;
+      output.message = L"解析输出结构不认识";
     }
-    if (output.status == apksx::WorkerStatus::Ok) result->raw_json = output.stdout_text;
+    if (result->ok) result->raw_json = output.stdout_text;
   }
 
-  // 失败的文案：页面内一行字 + 复制诊断（没有弹窗）
   if (result->ok) {
     wchar_t buf[96];
     if (want_hash) {
@@ -243,10 +236,10 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
     }
     result->footer = buf;
     if (!want_hash) {
-      int icon_px = 64;
+      int icon_px = 32;
       if (const HWND window = state->Window(); window != nullptr) {
         const UINT dpi = ::GetDpiForWindow(window);
-        if (dpi != 0) icon_px = ::MulDiv(46, static_cast<int>(dpi), 96);
+        if (dpi != 0) icon_px = ::MulDiv(32, static_cast<int>(dpi), 96);
       }
       result->icon = LoadHeaderIcon(path, icon_px);
     }
@@ -259,7 +252,7 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
   {
     std::lock_guard<std::mutex> guard(state->mutex);
     if (state->hwnd == nullptr) {
-      if (result->icon != nullptr) ::DeleteObject(result->icon);  // 页面已关
+      if (result->icon != nullptr) ::DeleteObject(result->icon);
       return;
     }
     state->pending = std::move(result);
@@ -268,7 +261,7 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
 }
 
 void StartWorker(HWND hwnd, const std::shared_ptr<PageState>& state, bool want_hash) {
-  state->started_ms = ::GetTickCount64();
+  (void)hwnd;
   state->cancel.store(false);
   if (want_hash) {
     state->hash_running = true;
@@ -278,350 +271,229 @@ void StartWorker(HWND hwnd, const std::shared_ptr<PageState>& state, bool want_h
     state->info_ok = false;
     state->footer = L"正在解析…";
   }
-  Relayout(hwnd, state.get());
-  ::InvalidateRect(hwnd, nullptr, TRUE);
-
-  // 线程持有一份 shared_ptr：即使 shell 先释放了 PropPage，PageState 也活到线程退出
+  RefreshView(state->hwnd);
   std::thread worker(WorkerThread, state, want_hash, state->path);
   worker.detach();
 }
 
-// ------------------------------------------------------------------ 布局 / 滚动
+// ------------------------------------------------------------------ 视图
 
-bool NeedHashButton(const PageState* state) {
-  if (state->hash_running || !state->info_ok) return false;
-  const apksx::PageRow* row = apksx::FindRow(state->model, L"SHA-256");
-  return row != nullptr && row->action;
+void ApplyFonts(PageState* state) {
+  HWND controls[] = {state->list,       state->icon_view,  state->package_view,
+                     state->version_view, state->status_view, state->hash_button,
+                     state->copy_button,  state->retry_button};
+  for (HWND control : controls) {
+    if (control != nullptr) {
+      ::SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->theme.font), TRUE);
+    }
+  }
+  if (state->label_view != nullptr) {
+    ::SendMessageW(state->label_view, WM_SETFONT,
+                   reinterpret_cast<WPARAM>(state->theme.font_bold), TRUE);
+  }
 }
 
-bool NeedRetryButton(const PageState* state) {
-  return !state->worker_running && !state->info_ok;
+void SetWindowTextSafe(HWND control, const std::wstring& text) {
+  if (control != nullptr) ::SetWindowTextW(control, text.c_str());
 }
 
-void UpdateScrollbar(HWND hwnd, PageState* state) {
+void Relayout(HWND hwnd) {
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
+  if (state == nullptr) return;
+
   RECT client{};
   ::GetClientRect(hwnd, &client);
-  const int page_height = static_cast<int>(state->view.metrics().body.bottom -
-                                           state->view.metrics().body.top);
-  const int max_pos = std::max(0, state->view.metrics().content_height - 1);
-  SCROLLINFO info{};
-  info.cbSize = sizeof(info);
-  info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-  info.nMin = 0;
-  info.nMax = max_pos;
-  info.nPage = static_cast<UINT>(std::max(0, page_height));
-  info.nPos = state->scroll_y;
-  ::SetScrollInfo(hwnd, SB_VERT, &info, TRUE);
-  (void)client;
-}
+  const int width = client.right - client.left;
+  const int height = client.bottom - client.top;
+  const int pad = state->theme.Scale(12);
+  const int icon_size = state->theme.Scale(32);
+  const int line_height = state->theme.Scale(18);
 
-void Relayout(HWND hwnd, PageState* state) {
-  HDC dc = ::GetDC(hwnd);
-  if (dc != nullptr) {
-    state->view.Layout(hwnd, dc, state->model, state->theme, NeedHashButton(state),
-                       NeedRetryButton(state));
-    ::ReleaseDC(hwnd, dc);
+  const int header_top = pad;
+  ::MoveWindow(state->icon_view, pad, header_top, icon_size, icon_size, TRUE);
+  const int text_left = pad + icon_size + state->theme.Scale(10);
+  const int text_width = std::max(0, width - text_left - pad);
+  ::MoveWindow(state->label_view, text_left, header_top, text_width, state->theme.Scale(20), TRUE);
+  ::MoveWindow(state->package_view, text_left, header_top + state->theme.Scale(20), text_width,
+               line_height, TRUE);
+  ::MoveWindow(state->version_view, text_left, header_top + state->theme.Scale(20) + line_height,
+               text_width, line_height, TRUE);
+
+  const int header_bottom =
+      header_top + std::max(icon_size, state->theme.Scale(20) + line_height * 2);
+  ::MoveWindow(state->separator, pad, header_bottom, std::max(0, width - pad * 2), 1, TRUE);
+
+  const int footer_height = state->theme.Scale(34);
+  const int footer_top = height - footer_height;
+  const int button_height = state->theme.Scale(24);
+  const int button_top = footer_top + (footer_height - button_height) / 2;
+  int right = width - pad;
+  const int copy_width = state->theme.Scale(128);
+  ::MoveWindow(state->copy_button, right - copy_width, button_top, copy_width, button_height, TRUE);
+  right -= copy_width + state->theme.Scale(6);
+  const int hash_width = state->theme.Scale(112);
+  if (::IsWindowVisible(state->hash_button)) {
+    ::MoveWindow(state->hash_button, right - hash_width, button_top, hash_width, button_height, TRUE);
+    right -= hash_width + state->theme.Scale(6);
   }
+  const int retry_width = state->theme.Scale(64);
+  if (::IsWindowVisible(state->retry_button)) {
+    ::MoveWindow(state->retry_button, right - retry_width, button_top, retry_width, button_height,
+                 TRUE);
+    right -= retry_width + state->theme.Scale(6);
+  }
+  ::MoveWindow(state->status_view, pad, footer_top,
+               std::max(0, right - pad - state->theme.Scale(8)), footer_height, TRUE);
 
-  // 滚到底之后内容变短（例如展开项收起）：把滚动位置收回来
-  const int page_height = static_cast<int>(state->view.metrics().body.bottom -
-                                           state->view.metrics().body.top);
-  const int max_scroll = std::max(0, state->view.metrics().content_height - page_height);
-  state->scroll_y = std::clamp(state->scroll_y, 0, max_scroll);
-  UpdateScrollbar(hwnd, state);
+  const int list_top = header_bottom + state->theme.Scale(8);
+  const int list_bottom = footer_top - state->theme.Scale(6);
+  const int list_height = std::max(0, list_bottom - list_top);
+  ::MoveWindow(state->list, pad, list_top, std::max(0, width - pad * 2), list_height, TRUE);
+  apksx::ApplyListColumns(state->list, std::max(0, width - pad * 2), state->theme.dpi);
 }
 
-void ScrollBy(HWND hwnd, PageState* state, int delta) {
-  const int page_height = static_cast<int>(state->view.metrics().body.bottom -
-                                           state->view.metrics().body.top);
-  const int max_scroll = std::max(0, state->view.metrics().content_height - page_height);
-  const int next = std::clamp(state->scroll_y + delta, 0, max_scroll);
-  if (next == state->scroll_y) return;
-  state->scroll_y = next;
-  UpdateScrollbar(hwnd, state);
-  ::InvalidateRect(hwnd, nullptr, TRUE);
+void RefreshView(HWND hwnd) {
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
+  if (state == nullptr) return;
+
+  SetWindowTextSafe(state->label_view,
+                    state->model.label.empty() ? state->file_name : state->model.label);
+  SetWindowTextSafe(state->package_view, state->model.package);
+  SetWindowTextSafe(state->version_view, state->model.version_line);
+  SetWindowTextSafe(state->status_view, state->footer);
+
+  apksx::PopulateListView(state->list, state->model);
+
+  const bool show_hash = state->info_ok && !state->hash_running;
+  const bool show_retry = !state->worker_running && !state->info_ok;
+  ::ShowWindow(state->icon_view, state->icon == nullptr ? SW_HIDE : SW_SHOW);
+  ::ShowWindow(state->hash_button, show_hash ? SW_SHOW : SW_HIDE);
+  ::ShowWindow(state->retry_button, show_retry ? SW_SHOW : SW_HIDE);
+  ::EnableWindow(state->copy_button, state->raw_json.empty() ? FALSE : TRUE);
+
+  Relayout(hwnd);
 }
 
 // ------------------------------------------------------------------ 交互
 
-void StartHashIfPossible(HWND hwnd, PageState* state) {
-  if (!NeedHashButton(state)) return;
-  if (state->worker_running || state->hash_running) return;
+void CopySelected(HWND hwnd, bool with_key) {
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
+  if (state == nullptr) return;
+  const int index = apksx::SelectedListIndex(state->list);
+  if (index < 0) return;
+  const std::wstring key = apksx::ListItemText(state->list, index, 0);
+  const std::wstring value = apksx::ListItemText(state->list, index, 1);
+  std::wstring text = value.empty() ? key : value;
+  if (with_key && !key.empty() && !value.empty()) text = key + L": " + value;
+  if (CopyTextToClipboard(hwnd, text)) {
+    state->footer = L"已复制到剪贴板";
+    SetWindowTextSafe(state->status_view, state->footer);
+  }
+}
+
+void CopyAllJson(HWND hwnd) {
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
+  if (state == nullptr) return;
+  std::wstring wide;
+  if (!state->raw_json.empty() && apksx::Utf8ToWide(state->raw_json, &wide)) {
+    if (CopyTextToClipboard(hwnd, wide)) {
+      state->footer = L"已复制 JSON 到剪贴板";
+      SetWindowTextSafe(state->status_view, state->footer);
+    }
+  }
+}
+
+void StartHash(HWND hwnd) {
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
+  if (state == nullptr) return;
+  if (!state->info_ok || state->hash_running || state->worker_running) return;
   StartWorker(hwnd, state->shared_from_this(), true);
 }
 
-void CopyAllJson(HWND hwnd, PageState* state) {
-  std::wstring wide;
-  if (!state->raw_json.empty() && apksx::Utf8ToWide(state->raw_json, &wide)) {
-    CopyTextToClipboard(hwnd, wide);
-    state->footer = L"已复制 JSON 到剪贴板";
-  } else {
-    state->footer = L"还没有可复制的 JSON";
-  }
-  ::InvalidateRect(hwnd, nullptr, TRUE);
-}
+void ShowListMenu(HWND hwnd, int screen_x, int screen_y) {
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
+  if (state == nullptr) return;
 
-void CopyItem(HWND hwnd, PageState* state, int index, bool with_key) {
-  if (index < 0) return;
-  const apksx::HitResult ref = state->view.RefAt(index);
-  std::wstring text;
-  if (ref.kind == apksx::HitKind::Row && ref.group < state->model.groups.size() &&
-      ref.row < state->model.groups[ref.group].rows.size()) {
-    const apksx::PageRow& row = state->model.groups[ref.group].rows[ref.row];
-    text = with_key && !row.key.empty() ? row.key + L": " + row.value : row.value;
-    if (text.empty()) text = row.copy_value;
-  } else {
-    text = state->view.ItemText(ref, state->model);
+  POINT client{screen_x, screen_y};
+  ::ScreenToClient(state->list, &client);
+  LVHITTESTINFO hit{};
+  hit.pt = client;
+  const int index = ListView_HitTest(state->list, &hit);
+  if (index >= 0) {
+    ListView_SetItemState(state->list, index, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
   }
-  if (text.empty()) return;
-  if (CopyTextToClipboard(hwnd, text)) {
-    state->footer = L"已复制到剪贴板";
-    ::InvalidateRect(hwnd, nullptr, TRUE);
-  }
-}
-
-void ToggleRow(HWND hwnd, PageState* state, int index) {
-  const apksx::HitResult ref = state->view.RefAt(index);
-  if (ref.kind != apksx::HitKind::Row) return;
-  if (ref.group >= state->model.groups.size()) return;
-  apksx::PageGroup& group = state->model.groups[ref.group];
-  if (ref.row >= group.rows.size()) return;
-  apksx::PageRow& row = group.rows[ref.row];
-  if (!row.expandable()) return;
-  row.expanded = !row.expanded;
-  Relayout(hwnd, state);
-  ::InvalidateRect(hwnd, nullptr, TRUE);
-}
-
-void OnClick(HWND hwnd, PageState* state, int x, int y) {
-  const apksx::HitResult hit = state->view.HitTest(x, y, state->scroll_y);
-  if (hit.kind == apksx::HitKind::Button) {
-    if (hit.button == apksx::PageView::kButtonHash) {
-      StartHashIfPossible(hwnd, state);
-    } else if (hit.button == apksx::PageView::kButtonCopyJson) {
-      CopyAllJson(hwnd, state);
-    } else if (hit.button == apksx::PageView::kButtonRetry) {
-      StartWorker(hwnd, state->shared_from_this(), false);
-    }
-    return;
-  }
-  const int index = state->view.HitIndex(x, y, state->scroll_y);
-  if (index < 0) return;
-  state->selected = index;
-  const apksx::HitResult ref = state->view.RefAt(index);
-  if (ref.kind == apksx::HitKind::Row) {
-    if (ref.group < state->model.groups.size() &&
-        ref.row < state->model.groups[ref.group].rows.size()) {
-      const apksx::PageRow& row = state->model.groups[ref.group].rows[ref.row];
-      if (row.key == L"SHA-256" && row.action) {
-        StartHashIfPossible(hwnd, state);
-      } else if (row.expandable()) {
-        ToggleRow(hwnd, state, index);
-      }
-    }
-  }
-  ::InvalidateRect(hwnd, nullptr, TRUE);
-}
-
-void ShowContextMenu(HWND hwnd, PageState* state, int x, int y) {
-  const int index = state->view.HitIndex(x, y, state->scroll_y);
-  state->selected = index;
-  ::InvalidateRect(hwnd, nullptr, TRUE);
-  if (index < 0) return;
 
   HMENU menu = ::CreatePopupMenu();
   if (menu == nullptr) return;
   ::AppendMenuW(menu, MF_STRING, kMenuCopyValue, L"复制值");
-  ::AppendMenuW(menu, MF_STRING, kMenuCopyPair, L"复制 \u201C键: 值\u201D");
+  ::AppendMenuW(menu, MF_STRING, kMenuCopyPair, L"复制 \u201C属性: 值\u201D");
   ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  ::AppendMenuW(menu, MF_STRING, kMenuCopyJson, L"复制全部为 JSON");
+  ::AppendMenuW(menu, MF_STRING | (state->raw_json.empty() ? MF_GRAYED : 0U), kMenuCopyJson,
+                L"复制全部为 JSON");
 
-  POINT pt{x, y};
-  ::ClientToScreen(hwnd, &pt);
-  const int command =
-      static_cast<int>(::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd,
-                                        nullptr));
+  const int command = static_cast<int>(
+      ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen_x, screen_y, 0, hwnd, nullptr));
   ::DestroyMenu(menu);
 
   switch (command) {
-    case kMenuCopyValue: CopyItem(hwnd, state, index, false); break;
-    case kMenuCopyPair: CopyItem(hwnd, state, index, true); break;
-    case kMenuCopyJson: CopyAllJson(hwnd, state); break;
+    case kMenuCopyValue: CopySelected(hwnd, false); break;
+    case kMenuCopyPair: CopySelected(hwnd, true); break;
+    case kMenuCopyJson: CopyAllJson(hwnd); break;
     default: break;
   }
 }
 
-void OnKeyDown(HWND hwnd, PageState* state, int vk) {
-  const int count = state->view.ItemCount();
-  switch (vk) {
-    case VK_DOWN:
-    case VK_UP: {
-      if (count == 0) return;
-      int index = state->selected;
-      const int step = (vk == VK_DOWN) ? 1 : -1;
-      for (int guard = 0; guard < count; ++guard) {
-        index += step;
-        if (index < 0) index = 0;
-        if (index >= count) index = count - 1;
-        const apksx::HitResult ref = state->view.RefAt(index);
-        if (ref.kind == apksx::HitKind::Row || ref.kind == apksx::HitKind::Child) {
-          state->selected = index;
-          break;
-        }
-      }
-      const int top = state->view.ItemTop(state->selected);
-      const int height = state->view.ItemHeight(state->selected);
-      const int page_height = static_cast<int>(state->view.metrics().body.bottom -
-                                               state->view.metrics().body.top);
-      if (top - state->scroll_y < 0) {
-        ScrollBy(hwnd, state, top - state->scroll_y);
-      } else if (top + height - state->scroll_y > page_height) {
-        ScrollBy(hwnd, state, top + height - page_height - state->scroll_y);
-      }
-      ::InvalidateRect(hwnd, nullptr, TRUE);
-      break;
-    }
-    case VK_HOME: ScrollBy(hwnd, state, -state->scroll_y); break;
-    case VK_END: {
-      const int page_height = static_cast<int>(state->view.metrics().body.bottom -
-                                               state->view.metrics().body.top);
-      ScrollBy(hwnd, state, state->view.metrics().content_height - page_height - state->scroll_y);
-      break;
-    }
-    case 'C':
-      if (::GetKeyState(VK_CONTROL) < 0) CopyItem(hwnd, state, state->selected, false);
-      break;
-    case 'A':
-      if (::GetKeyState(VK_CONTROL) < 0) CopyAllJson(hwnd, state);
-      break;
-    case VK_RETURN:
-    case VK_SPACE:
-      if (state->selected >= 0) {
-        const apksx::HitResult ref = state->view.RefAt(state->selected);
-        if (ref.kind == apksx::HitKind::Row && ref.group < state->model.groups.size() &&
-            ref.row < state->model.groups[ref.group].rows.size()) {
-          const apksx::PageRow& row = state->model.groups[ref.group].rows[ref.row];
-          if (row.key == L"SHA-256" && row.action) {
-            StartHashIfPossible(hwnd, state);
-          } else if (row.expandable()) {
-            ToggleRow(hwnd, state, state->selected);
-          }
-        }
-      }
-      break;
-    default: break;
-  }
+// ------------------------------------------------------------------ 控件创建
+
+HWND CreateStatic(HWND parent, int id, DWORD style) {
+  return ::CreateWindowExW(0, L"Static", L"", WS_CHILD | WS_VISIBLE | style, 0, 0, 0, 0, parent,
+                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                           ::GetModuleHandleW(nullptr), nullptr);
 }
 
-void HideTooltip(PageState* state) {
-  if (state->tooltip == nullptr || !state->tooltip_visible) return;
-  TOOLINFOW info{};
-  info.cbSize = sizeof(info);
-  info.hwnd = state->hwnd;
-  info.uId = 1;
-  ::SendMessageW(state->tooltip, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&info));
-  state->tooltip_visible = false;
+void CreateControls(HWND hwnd, PageState* state) {
+  state->icon_view = CreateStatic(hwnd, kIdIcon, SS_BITMAP | SS_CENTERIMAGE);
+  state->label_view = CreateStatic(hwnd, kIdLabel, SS_LEFT | SS_ENDELLIPSIS);
+  state->package_view = CreateStatic(hwnd, kIdPackage, SS_LEFT | SS_ENDELLIPSIS);
+  state->version_view = CreateStatic(hwnd, kIdVersion, SS_LEFT | SS_ENDELLIPSIS);
+  state->separator = CreateStatic(hwnd, kIdSeparator, SS_ETCHEDHORZ);
+
+  state->list = ::CreateWindowExW(
+      WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS |
+          LVS_NOSORTHEADER,
+      0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdList)),
+      ::GetModuleHandleW(nullptr), nullptr);
+  apksx::ConfigureListView(state->list);
+  LVCOLUMNW column{};
+  column.mask = LVCF_TEXT | LVCF_SUBITEM | LVCF_FMT;
+  column.fmt = LVCFMT_LEFT;
+  column.pszText = const_cast<wchar_t*>(L"属性");
+  column.iSubItem = 0;
+  ListView_InsertColumn(state->list, 0, &column);
+  column.pszText = const_cast<wchar_t*>(L"值");
+  column.iSubItem = 1;
+  ListView_InsertColumn(state->list, 1, &column);
+
+  state->status_view = CreateStatic(hwnd, kIdStatus, SS_LEFT | SS_ENDELLIPSIS);
+
+  const DWORD button_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON;
+  state->hash_button = ::CreateWindowExW(
+      0, L"Button", L"计算 SHA-256", button_style, 0, 0, 0, 0, hwnd,
+      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHash)), ::GetModuleHandleW(nullptr), nullptr);
+  state->copy_button = ::CreateWindowExW(
+      0, L"Button", L"复制全部为 JSON", button_style, 0, 0, 0, 0, hwnd,
+      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdCopyJson)), ::GetModuleHandleW(nullptr),
+      nullptr);
+  state->retry_button = ::CreateWindowExW(
+      0, L"Button", L"重试", button_style, 0, 0, 0, 0, hwnd,
+      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRetry)), ::GetModuleHandleW(nullptr), nullptr);
+  ::ShowWindow(state->retry_button, SW_HIDE);
+  ::EnableWindow(state->copy_button, FALSE);
 }
 
-void PositionTooltip(PageState* state, int x, int y) {
-  if (state->tooltip == nullptr || !state->tooltip_visible) return;
-  POINT pt{x, y};
-  ::ClientToScreen(state->hwnd, &pt);
-  pt.x += 16;
-  pt.y += 20;
-  ::SendMessageW(state->tooltip, TTM_TRACKPOSITION, 0, MAKELPARAM(pt.x, pt.y));
-}
-
-// 只有"悬停停留够久 + 内容可能被省略号截断"才显示
-void ShowTooltip(HWND hwnd, PageState* state) {
-  if (state->tooltip == nullptr || state->hot < 0) return;
-  // 只在"上一帧确实被省略号截断"时才出 tooltip（原生行为），不再按字符数猜
-  if (!state->view.ItemTruncated(state->hot)) return;
-  const apksx::HitResult ref = state->view.RefAt(state->hot);
-  std::wstring text = state->view.ItemText(ref, state->model);
-  if (text.empty()) return;
-  TOOLINFOW info{};
-  info.cbSize = sizeof(info);
-  info.hwnd = hwnd;
-  info.uId = 1;
-  info.lpszText = text.data();
-  ::SendMessageW(state->tooltip, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&info));
-  POINT pt{state->last_mouse_x, state->last_mouse_y};
-  ::ClientToScreen(hwnd, &pt);
-  pt.x += 16;
-  pt.y += 20;
-  ::SendMessageW(state->tooltip, TTM_TRACKPOSITION, 0, MAKELPARAM(pt.x, pt.y));
-  ::SendMessageW(state->tooltip, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&info));
-  state->tooltip_visible = true;
-}
-
-// 只重画某个 item（hover/选中变化时用；比整窗重画便宜两个数量级）
-void InvalidateItem(HWND hwnd, PageState* state, int index) {
-  RECT rc{};
-  if (state->view.ItemClientRect(index, state->scroll_y, &rc)) {
-    ::InvalidateRect(hwnd, &rc, FALSE);
-  }
-}
-
-void EnsureBuffer(PageState* state, HDC reference, int width, int height) {
-  if (width <= 0 || height <= 0) return;
-  if (state->buffer_dc != nullptr && state->buffer_width == width &&
-      state->buffer_height == height) {
-    return;
-  }
-  if (state->buffer_dc != nullptr) {
-    ::DeleteDC(state->buffer_dc);
-    state->buffer_dc = nullptr;
-  }
-  if (state->buffer_bitmap != nullptr) {
-    ::DeleteObject(state->buffer_bitmap);
-    state->buffer_bitmap = nullptr;
-  }
-  state->buffer_dc = ::CreateCompatibleDC(reference);
-  if (state->buffer_dc == nullptr) return;
-  state->buffer_bitmap = ::CreateCompatibleBitmap(reference, width, height);
-  if (state->buffer_bitmap == nullptr) {
-    ::DeleteDC(state->buffer_dc);
-    state->buffer_dc = nullptr;
-    return;
-  }
-  ::SelectObject(state->buffer_dc, state->buffer_bitmap);
-  state->buffer_width = width;
-  state->buffer_height = height;
-}
-
-void ReleaseBuffer(PageState* state) {
-  if (state->buffer_dc != nullptr) {
-    ::DeleteDC(state->buffer_dc);
-    state->buffer_dc = nullptr;
-  }
-  if (state->buffer_bitmap != nullptr) {
-    ::DeleteObject(state->buffer_bitmap);
-    state->buffer_bitmap = nullptr;
-  }
-  state->buffer_width = 0;
-  state->buffer_height = 0;
-}
-
-void CreateTooltip(HWND hwnd, PageState* state) {
-  state->tooltip = ::CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
-                                     WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT,
-                                     CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwnd, nullptr,
-                                     g_module, nullptr);
-  if (state->tooltip == nullptr) return;
-  TOOLINFOW info{};
-  info.cbSize = sizeof(info);
-  info.uFlags = TTF_TRACK | TTF_ABSOLUTE;
-  info.hwnd = hwnd;
-  info.uId = 1;
-  info.lpszText = const_cast<wchar_t*>(L"");
-  ::SendMessageW(state->tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
-  ::SendMessageW(state->tooltip, TTM_SETMAXTIPWIDTH, 0, static_cast<LPARAM>(420));
-}
-
-// ------------------------------------------------------------------ 对话框
-
-void ApplyPending(HWND hwnd, PageState* state);
+void ApplyPending(HWND hwnd);
 
 INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 
@@ -629,19 +501,15 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
  public:
   PropPage() { IncrementServerLock(); }
 
-  // IUnknown
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
     if (ppv == nullptr) return E_POINTER;
     *ppv = nullptr;
-    apksx::DebugLogf(L"apkprop: QI riid=%08lX-%04X-%04X", static_cast<unsigned long>(riid.Data1),
-                     static_cast<unsigned>(riid.Data2), static_cast<unsigned>(riid.Data3));
     if (riid == IID_IUnknown || riid == IID_IShellPropSheetExt) {
       *ppv = static_cast<IShellPropSheetExt*>(this);
     } else if (riid == IID_IPersistFile || riid == IID_IPersist) {
       *ppv = static_cast<IPersistFile*>(this);
     } else if (riid == IID_IShellExtInit) {
-      // 实测：这个 Windows build 的属性对话框在建页之前先 QI IShellExtInit，
-      // 拿不到就整个跳过 handler（IPersistFile::Load 都不会被调）。
+      // 实测：这个 Windows build 在建页之前先 QI 它，拿不到就整个跳过 handler
       *ppv = static_cast<IShellExtInit*>(this);
     } else {
       return E_NOINTERFACE;
@@ -663,11 +531,9 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
     return static_cast<ULONG>(remaining);
   }
 
-  // IShellPropSheetExt
   HRESULT STDMETHODCALLTYPE AddPages(LPFNADDPROPSHEETPAGE add_page, LPARAM lparam) override {
     if (add_page == nullptr) return E_POINTER;
     try {
-      apksx::DebugLogf(L"apkprop: AddPages path=%s", path_.c_str());
       if (state_ == nullptr) {
         state_ = std::make_shared<PageState>();
         state_->path = path_;
@@ -684,9 +550,8 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
       page.lParam = reinterpret_cast<LPARAM>(this);
 
       HPROPSHEETPAGE handle = ::CreatePropertySheetPageW(&page);
-      apksx::DebugLogf(L"apkprop: CreatePropertySheetPage -> %p", handle);
       if (handle == nullptr) return E_FAIL;
-      AddRef();  // WM_DESTROY 时 Release
+      AddRef();
       if (!add_page(handle, lparam)) {
         ::DestroyPropertySheetPage(handle);
         Release();
@@ -700,16 +565,13 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
 
   HRESULT STDMETHODCALLTYPE ReplacePage(UINT page_id, LPFNADDPROPSHEETPAGE add_page,
                                         LPARAM lparam) override {
-    apksx::DebugLogf(L"apkprop: ReplacePage id=%u", page_id);
     (void)page_id;
     (void)add_page;
     (void)lparam;
     return E_NOTIMPL;
   }
 
-  // IPersistFile
   HRESULT STDMETHODCALLTYPE GetClassID(CLSID* clsid) override {
-    apksx::DebugLog(L"apkprop: GetClassID");
     if (clsid == nullptr) return E_POINTER;
     *clsid = CLSID_ApkPropertyPage;
     return S_OK;
@@ -721,7 +583,6 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
     (void)mode;
     if (filename == nullptr) return E_INVALIDARG;
     path_ = filename;
-    apksx::DebugLogf(L"apkprop: IPersistFile::Load %s", path_.c_str());
     return S_OK;
   }
 
@@ -736,7 +597,12 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
     return S_OK;
   }
 
-  // IShellExtInit：属性对话框与"发送到"等宿主用它把选中项递进来
+  HRESULT STDMETHODCALLTYPE GetCurFile(LPOLESTR* filename) override {
+    if (filename == nullptr) return E_POINTER;
+    *filename = nullptr;
+    return S_FALSE;
+  }
+
   HRESULT STDMETHODCALLTYPE Initialize(PCIDLIST_ABSOLUTE folder, IDataObject* data,
                                        HKEY key) override {
     (void)folder;
@@ -760,14 +626,7 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
     ::ReleaseStgMedium(&medium);
     if (path.empty()) return E_INVALIDARG;
     path_ = path;
-    apksx::DebugLogf(L"apkprop: IShellExtInit::Initialize %s", path_.c_str());
     return S_OK;
-  }
-
-  HRESULT STDMETHODCALLTYPE GetCurFile(LPOLESTR* filename) override {
-    if (filename == nullptr) return E_POINTER;
-    *filename = nullptr;
-    return S_FALSE;
   }
 
   const std::shared_ptr<PageState>& state() const { return state_; }
@@ -781,18 +640,17 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
 };
 
 INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
-  auto* page = reinterpret_cast<PropPage*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
-  PageState* state = nullptr;
-  if (page != nullptr) state = page->state().get();
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
 
   switch (message) {
     case WM_INITDIALOG: {
       auto* psp = reinterpret_cast<PROPSHEETPAGEW*>(lparam);
-      page = psp == nullptr ? nullptr : reinterpret_cast<PropPage*>(psp->lParam);
+      auto* page = psp == nullptr ? nullptr : reinterpret_cast<PropPage*>(psp->lParam);
       if (page == nullptr) return FALSE;
-      ::SetWindowLongPtrW(hwnd, DWLP_USER, reinterpret_cast<LONG_PTR>(page));
       state = page->state().get();
       if (state == nullptr) return FALSE;
+      state->owner = page;
+      ::SetWindowLongPtrW(hwnd, DWLP_USER, reinterpret_cast<LONG_PTR>(state));
 
       {
         std::lock_guard<std::mutex> guard(state->mutex);
@@ -800,193 +658,55 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
         state->cancel.store(false);
       }
       (void)apksx::LoadTheme(&state->theme, hwnd);
-      CreateTooltip(hwnd, state);
-
-      // 骨架：先给一个"正在解析…"的模型，首屏立刻有内容
+      CreateControls(hwnd, state);
+      ApplyFonts(state);
       state->model = apksx::PageModel();
       state->model.label = state->file_name;
-      state->footer = L"正在解析…";
-      Relayout(hwnd, state);
-
+      RefreshView(hwnd);
       StartWorker(hwnd, page->state(), false);
-      return TRUE;  // 让系统选默认焦点
+      return TRUE;
     }
 
-    case WM_SIZE: {
-      if (state == nullptr) break;
-      Relayout(hwnd, state);
-      ::InvalidateRect(hwnd, nullptr, TRUE);
+    case WM_SIZE:
+      Relayout(hwnd);
       break;
-    }
 
-    case WM_ERASEBKGND:
-      return 1;  // 全部自绘
-
-    case WM_PAINT: {
+    case WM_COMMAND: {
       if (state == nullptr) break;
-      // 必须在 BeginPaint 之前取：BeginPaint 会把更新区域"验证"掉
-      RECT update{};
-      if (::GetUpdateRect(hwnd, &update, FALSE)) {
-        apksx::DebugLogf(L"propsheet: paint invalid=%ldx%ld",
-                         static_cast<long>(update.right - update.left),
-                         static_cast<long>(update.bottom - update.top));
-      }
-      PAINTSTRUCT ps{};
-      HDC dc = ::BeginPaint(hwnd, &ps);
-      if (dc != nullptr) {
-        RECT client{};
-        ::GetClientRect(hwnd, &client);
-        const int width = client.right - client.left;
-        const int height = client.bottom - client.top;
-        // 双缓冲：直接画到窗口 DC 时，整窗重画能看到"先底、再行、再底栏"的中间态（快滑时闪）
-        EnsureBuffer(state, dc, width, height);
-        HDC target = state->buffer_dc != nullptr ? state->buffer_dc : dc;
-        state->view.Paint(target, hwnd, state->model, state->theme, state->scroll_y, state->hot,
-                          state->selected, state->footer, NeedHashButton(state), state->icon);
-        if (target != dc) ::BitBlt(dc, 0, 0, width, height, target, 0, 0, SRCCOPY);
-      }
-      ::EndPaint(hwnd, &ps);
-      return 0;
-    }
-
-    case WM_APP + 1:
-    case WM_APP + 2: {
-      if (state == nullptr) break;
-      ApplyPending(hwnd, state);
-      break;
-    }
-
-    case WM_VSCROLL: {
-      if (state == nullptr) break;
-      SCROLLINFO info{};
-      info.cbSize = sizeof(info);
-      info.fMask = SIF_ALL;
-      ::GetScrollInfo(hwnd, SB_VERT, &info);
-      int target = state->scroll_y;
       switch (LOWORD(wparam)) {
-        case SB_LINEUP: target -= state->theme.Scale(20); break;
-        case SB_LINEDOWN: target += state->theme.Scale(20); break;
-        case SB_PAGEUP: target -= static_cast<int>(info.nPage); break;
-        case SB_PAGEDOWN: target += static_cast<int>(info.nPage); break;
-        case SB_THUMBTRACK:
-        case SB_THUMBPOSITION: target = info.nTrackPos; break;
-        case SB_TOP: target = 0; break;
-        case SB_BOTTOM: target = info.nMax; break;
+        case kIdHash: StartHash(hwnd); break;
+        case kIdCopyJson: CopyAllJson(hwnd); break;
+        case kIdRetry: StartWorker(hwnd, state->shared_from_this(), false); break;
         default: break;
       }
-      ScrollBy(hwnd, state, target - state->scroll_y);
       break;
     }
 
-    case WM_MOUSEWHEEL: {
+    case WM_NOTIFY: {
       if (state == nullptr) break;
-      const int delta = GET_WHEEL_DELTA_WPARAM(wparam);
-      const int lines = -delta / WHEEL_DELTA * state->view.metrics().row_height * 3;
-      ScrollBy(hwnd, state, lines);
-      break;
-    }
-
-    case WM_MOUSEMOVE: {
-      if (state == nullptr) break;
-      const int x = GET_X_LPARAM(lparam);
-      const int y = GET_Y_LPARAM(lparam);
-      state->last_mouse_x = x;
-      state->last_mouse_y = y;
-      if (!state->tracking_mouse) {
-        TRACKMOUSEEVENT track{};
-        track.cbSize = sizeof(track);
-        track.dwFlags = TME_LEAVE;
-        track.hwndTrack = hwnd;
-        ::TrackMouseEvent(&track);
-        state->tracking_mouse = true;
-      }
-
-      const int index = state->view.HitIndex(x, y, state->scroll_y);
-      if (index != state->hot) {
-        // 脏矩形：只重画旧行与新行，整窗重画留给滚动/尺寸变化
-        InvalidateItem(hwnd, state, state->hot);
-        state->hot = index;
-        InvalidateItem(hwnd, state, index);
-        ::KillTimer(hwnd, kTooltipTimerId);
-        HideTooltip(state);
-        if (index >= 0) ::SetTimer(hwnd, kTooltipTimerId, kTooltipDwellMs, nullptr);
-      } else {
-        PositionTooltip(state, x, y);
-      }
-
-      const apksx::HitResult ref = index < 0 ? apksx::HitResult{} : state->view.RefAt(index);
-      bool hand = ref.kind == apksx::HitKind::Button;
-      if (ref.kind == apksx::HitKind::Row && ref.group < state->model.groups.size() &&
-          ref.row < state->model.groups[ref.group].rows.size()) {
-        const apksx::PageRow& row = state->model.groups[ref.group].rows[ref.row];
-        hand = hand || row.action || row.expandable();
-      }
-      if (hand != state->hand_cursor) {
-        state->hand_cursor = hand;
-        ::SetCursor(::LoadCursorW(nullptr, hand ? IDC_HAND : IDC_ARROW));
+      auto* header = reinterpret_cast<NMHDR*>(lparam);
+      if (header == nullptr || header->hwndFrom != state->list) break;
+      if (header->code == NM_RCLICK) {
+        POINT pt{};
+        ::GetCursorPos(&pt);
+        ShowListMenu(hwnd, pt.x, pt.y);
+      } else if (header->code == NM_DBLCLK) {
+        CopySelected(hwnd, false);
+      } else if (header->code == LVN_KEYDOWN) {
+        auto* key = reinterpret_cast<NMLVKEYDOWN*>(lparam);
+        if (key != nullptr && key->wVKey == 'C' && (::GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+          CopySelected(hwnd, false);
+        }
       }
       break;
     }
 
-    case WM_MOUSELEAVE: {
-      if (state == nullptr) break;
-      state->tracking_mouse = false;
-      ::KillTimer(hwnd, kTooltipTimerId);
-      HideTooltip(state);
-      InvalidateItem(hwnd, state, state->hot);
-      state->hot = -1;
+    case kMsgInfoDone:
+    case kMsgHashDone:
+      ApplyPending(hwnd);
       break;
-    }
 
-    case WM_TIMER: {
-      if (state == nullptr) break;
-      if (wparam == kTooltipTimerId) {
-        ::KillTimer(hwnd, kTooltipTimerId);
-        ShowTooltip(hwnd, state);
-      }
-      break;
-    }
-
-    case WM_SETCURSOR:
-      return TRUE;
-
-    case WM_LBUTTONDOWN: {
-      if (state == nullptr) break;
-      ::SetFocus(hwnd);
-      OnClick(hwnd, state, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
-      break;
-    }
-
-    case WM_CONTEXTMENU: {
-      if (state == nullptr) break;
-      const HWND source = reinterpret_cast<HWND>(wparam);
-      if (source != hwnd) break;
-      POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      if (pt.x == -1 && pt.y == -1) {
-        RECT rc{};
-        ::GetWindowRect(hwnd, &rc);
-        pt.x = rc.left + state->theme.Scale(20);
-        pt.y = rc.top + state->theme.Scale(20);
-      } else {
-        ::ScreenToClient(hwnd, &pt);
-      }
-      ShowContextMenu(hwnd, state, pt.x, pt.y);
-      break;
-    }
-
-    case WM_KEYDOWN: {
-      if (state == nullptr) break;
-      OnKeyDown(hwnd, state, static_cast<int>(wparam));
-      break;
-    }
-
-    case WM_GETDLGCODE: {
-      // 让页面拿到方向键/Ctrl+C，而不是被属性对话框吃掉
-      return DLGC_WANTARROWS | DLGC_WANTCHARS;
-    }
-
-    // 亮暗由系统 / 宿主决定：只在这几个"系统外观变了"的消息上重新问一遍宿主，
-    // 不自己读主题开关（用户 2026-11-04 的要求）。
+    // 系统外观 / DPI 变化：字体重新问宿主；控件由系统按主题重画，我们只做重排
     case WM_SYSCOLORCHANGE:
     case WM_THEMECHANGED:
     case WM_SETTINGCHANGE:
@@ -994,26 +714,23 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
       if (state == nullptr) break;
       apksx::DestroyTheme(&state->theme);
       (void)apksx::LoadTheme(&state->theme, hwnd);
-      Relayout(hwnd, state);
+      ApplyFonts(state);
+      Relayout(hwnd);
       ::InvalidateRect(hwnd, nullptr, TRUE);
       break;
     }
 
     case WM_DESTROY: {
-      if (page == nullptr) break;
-      PageState* shared_state = page->state().get();
+      if (state == nullptr) break;
+      // 先拿住一份 shared_ptr：放掉 PropPage 的引用后，state 由这里保活到函数结束
+      const std::shared_ptr<PageState> keep = state->shared_from_this();
+      PageState* shared_state = state;
       if (shared_state != nullptr) {
         {
           std::lock_guard<std::mutex> guard(shared_state->mutex);
           shared_state->hwnd = nullptr;
         }
-        shared_state->cancel.store(true);  // 线程 20 ms 内会看到；worker 在 Job 里被杀掉
-        ::KillTimer(hwnd, kTooltipTimerId);
-        ReleaseBuffer(shared_state);
-        if (shared_state->tooltip != nullptr) {
-          ::DestroyWindow(shared_state->tooltip);
-          shared_state->tooltip = nullptr;
-        }
+        shared_state->cancel.store(true);
         if (shared_state->icon != nullptr) {
           ::DeleteObject(shared_state->icon);
           shared_state->icon = nullptr;
@@ -1021,7 +738,11 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
         apksx::DestroyTheme(&shared_state->theme);
       }
       ::SetWindowLongPtrW(hwnd, DWLP_USER, 0);
-      page->Release();  // AddPages 里的 AddRef
+      if (state->owner != nullptr) {
+        PropPage* owner = state->owner;
+        state->owner = nullptr;
+        owner->Release();  // 可能在这里销毁 PropPage（它持有的 shared_ptr 会在 keep 之后才释放）
+      }
       break;
     }
 
@@ -1030,7 +751,10 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
   return FALSE;
 }
 
-void ApplyPending(HWND hwnd, PageState* state) {
+void ApplyPending(HWND hwnd) {
+  auto* state = reinterpret_cast<PageState*>(::GetWindowLongPtrW(hwnd, DWLP_USER));
+  if (state == nullptr) return;
+
   std::unique_ptr<PendingResult> result;
   {
     std::lock_guard<std::mutex> guard(state->mutex);
@@ -1040,17 +764,16 @@ void ApplyPending(HWND hwnd, PageState* state) {
 
   if (result->kind == PendingResult::Kind::Info) {
     state->worker_running = false;
-    if (result->ok) state->raw_json = result->raw_json;
     state->info_ok = result->ok;
     if (result->ok) {
+      state->raw_json = result->raw_json;
       state->model = std::move(result->model);
-      state->selected = -1;
-      state->hot = -1;
-      state->scroll_y = 0;
       if (result->icon != nullptr) {
         if (state->icon != nullptr) ::DeleteObject(state->icon);
         state->icon = result->icon;
         result->icon = nullptr;
+        ::SendMessageW(state->icon_view, STM_SETIMAGE, IMAGE_BITMAP,
+                       reinterpret_cast<LPARAM>(state->icon));
       }
     } else {
       std::vector<std::wstring> lines;
@@ -1059,15 +782,18 @@ void ApplyPending(HWND hwnd, PageState* state) {
       apksx::PageModel model;
       apksx::BuildErrorModel(state->file_name, lines, &model);
       state->model = std::move(model);
+      state->raw_json.clear();
     }
   } else {
     state->hash_running = false;
     if (result->ok) apksx::SetSha256(&state->model, result->sha256);
   }
   state->footer = result->footer;
-
-  Relayout(hwnd, state);
-  ::InvalidateRect(hwnd, nullptr, TRUE);
+  RefreshView(hwnd);
+  // 算完哈希后滚到那一行：结果就在眼前，不用自己找
+  if (result->kind == PendingResult::Kind::Hash && result->ok) {
+    apksx::ScrollListRowIntoView(state->list, apksx::FindListRowByKey(state->list, L"SHA-256"));
+  }
 }
 
 }  // namespace

@@ -398,7 +398,7 @@ int wmain(int argc, wchar_t** argv) {
   }
 
   // 测试钩子：属性页要验证"解析器崩溃"的文案（M3 验收）。环境变量管不到 explorer 拉起的子进程，
-  // 所以用标志文件：%TEMP%pk-shell-ext.test-abort.on 存在时，等 300 ms 后模拟访问违例。
+  // 所以用标志文件：%TEMP%\apk-shell-ext.test-abort.on 存在时，等 300 ms 后模拟访问违例。
   {
     wchar_t temp[MAX_PATH * 2] = {};
     const DWORD n = ::GetTempPathW(ARRAYSIZE(temp), temp);

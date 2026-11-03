@@ -15,6 +15,12 @@ param(
     [switch]$SkipUia,
     # Move the cursor down the page in N steps before capture (reproduce fast hovering).
     [int]$HoverSweep = 0,
+    # Wait this long after the -ClickPoint click before capturing (e.g. let SHA-256 finish).
+    [int]$AfterClickWaitMs = 400,
+    # Invoke a button by its caption through UI Automation (works even when the dialog
+    # cannot take foreground focus, where synthetic mouse clicks land on another window).
+    [string]$InvokeButton = '',
+    [int]$AfterInvokeWaitMs = 1500,
     [switch]$KeepOpen
 )
 # Opens the "Properties" dialog for an APK via the shell verb, waits, then captures
@@ -26,6 +32,10 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient,
 if (-not ('Win32.PropWindowApi' -as [type])) {
     Add-Type -Namespace Win32 -Name PropWindowApi -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+[DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hDlg, int id);
+[DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+[DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc callback, IntPtr param);
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wp, IntPtr lp);
@@ -100,9 +110,16 @@ while ((Get-Date) -lt $deadline -and $dialog -eq [IntPtr]::Zero) {
 }
 if ($dialog -eq [IntPtr]::Zero) { throw "properties dialog did not appear within $($WaitMs + 3000) ms" }
 
+function Set-DialogTop([IntPtr]$h) {
+    # HWND_TOPMOST(-1) | SWP_NOSIZE | SWP_NOACTIVATE: keep mouse/wheel input on the dialog
+    [void][Win32.PropWindowApi]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, 0x0013)
+    [void][Win32.PropWindowApi]::SetForegroundWindow($h)
+    Start-Sleep -Milliseconds 150
+}
+
 [void][Win32.PropWindowApi]::ShowWindow($dialog, 5)
-[void][Win32.PropWindowApi]::SetForegroundWindow($dialog)
-Start-Sleep -Milliseconds 400
+Set-DialogTop $dialog
+Start-Sleep -Milliseconds 250
 
 # Select the custom tab through UI Automation (keyboard tab switching is unreliable
 # because the dialog is opened by another process and may not take focus).
@@ -170,13 +187,16 @@ for ($i = 0; (-not $selected) -and ($i -lt $CtrlTabPresses); $i++) {
     [Win32.PropWindowApi]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)      # Ctrl up
     Start-Sleep -Milliseconds 350
 }
+# Let the page finish its first parse before any interaction (the old order clicked first).
+# settle before interaction
+Start-Sleep -Milliseconds $WaitMs
+
 if ($WheelClicks -gt 0) {
     $windowRect2 = New-Object Win32.PropWindowApi+RECT
     [void][Win32.PropWindowApi]::GetWindowRect($dialog, [ref]$windowRect2)
     $centerX = $windowRect2.Left + [int](($windowRect2.Right - $windowRect2.Left) / 2)
     $centerY = $windowRect2.Top + [int](($windowRect2.Bottom - $windowRect2.Top) / 2)
-    [void][Win32.PropWindowApi]::SetForegroundWindow($dialog)
-    Start-Sleep -Milliseconds 200
+    Set-DialogTop $dialog
     [void][Win32.PropWindowApi]::SetCursorPos($centerX, $centerY)
     Start-Sleep -Milliseconds 100
     for ($i = 0; $i -lt $WheelClicks; $i++) {
@@ -185,20 +205,51 @@ if ($WheelClicks -gt 0) {
     }
     Write-Host ("scrolled {0} notches" -f $WheelClicks)
     Start-Sleep -Milliseconds 300
-}if (-not [string]::IsNullOrEmpty($ClickPoint)) {
+}if (-not [string]::IsNullOrEmpty($InvokeButton)) {
+    # Cross-process BM_CLICK on the page's button: UIA cannot see our page's child buttons
+    # from the sheet root on this build, and synthetic mouse events land on whichever window
+    # actually owns the foreground. Control ids: 1002 hash / 1003 copy / 1004 retry.
+    $buttonId = switch ($InvokeButton) {
+        'hash' { 1002 }
+        'copy' { 1003 }
+        'retry' { 1004 }
+        default { throw "unknown -InvokeButton (use hash|copy|retry)" }
+    }
+
+    $script:pageDlg = [IntPtr]::Zero
+    $childCallback = [Win32.PropWindowApi+EnumProc]{
+        param($hwnd, $param)
+        if ($script:pageDlg -ne [IntPtr]::Zero) { return $false }
+        $cls = New-Object System.Text.StringBuilder 64
+        [void][Win32.PropWindowApi]::GetClassName($hwnd, $cls, 64)
+        if ($cls.ToString() -eq '#32770') { $script:pageDlg = $hwnd; return $false }
+        return $true
+    }
+    [void][Win32.PropWindowApi]::EnumChildWindows($dialog, $childCallback, [IntPtr]::Zero)
+    if ($script:pageDlg -eq [IntPtr]::Zero) { throw "page dialog (#32770) not found inside the property sheet" }
+
+    $button = [Win32.PropWindowApi]::GetDlgItem($script:pageDlg, [int]$buttonId)
+    if ($button -eq [IntPtr]::Zero) { throw ("button id {0} not found" -f $buttonId) }
+    # WM_COMMAND straight to the page dialog: BM_CLICK on a cross-process button is not
+    # delivered on this build, and the code path we want to exercise is the dialog handler.
+    [void][Win32.PropWindowApi]::SendMessage($script:pageDlg, [uint32]0x0111, [IntPtr]$buttonId, [IntPtr]::Zero)
+    Write-Host ("clicked button id {0}" -f $buttonId)
+    Start-Sleep -Milliseconds $AfterInvokeWaitMs
+}
+
+if (-not [string]::IsNullOrEmpty($ClickPoint)) {
     $parts = $ClickPoint.Split(',')
     $windowRect = New-Object Win32.PropWindowApi+RECT
     [void][Win32.PropWindowApi]::GetWindowRect($dialog, [ref]$windowRect)
     $screenX = $windowRect.Left + [int]$parts[0]
     $screenY = $windowRect.Top + [int]$parts[1]
-    [void][Win32.PropWindowApi]::SetForegroundWindow($dialog)
-    Start-Sleep -Milliseconds 200
+    Set-DialogTop $dialog
     [void][Win32.PropWindowApi]::SetCursorPos($screenX, $screenY)
     Start-Sleep -Milliseconds 120
     [Win32.PropWindowApi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)   # LEFTDOWN
     [Win32.PropWindowApi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)   # LEFTUP
     Write-Host ("clicked screen ({0},{1})" -f $screenX, $screenY)
-    Start-Sleep -Milliseconds 400
+    Start-Sleep -Milliseconds $AfterClickWaitMs
 }
 
 if ($HoverSweep -gt 0) {
@@ -207,7 +258,7 @@ if ($HoverSweep -gt 0) {
     $left = $windowRect3.Left + 40
     $top = $windowRect3.Top + 120
     $bottom = $windowRect3.Bottom - 90
-    [void][Win32.PropWindowApi]::SetForegroundWindow($dialog)
+    Set-DialogTop $dialog
     for ($i = 0; $i -lt $HoverSweep; $i++) {
         $y = $top + [int](($bottom - $top) * ($i % 20) / 20)
         [void][Win32.PropWindowApi]::SetCursorPos($left, $y)
@@ -218,7 +269,7 @@ if ($HoverSweep -gt 0) {
 
 
 
-Start-Sleep -Milliseconds $WaitMs
+Start-Sleep -Milliseconds 150
 
 $rect = New-Object Win32.PropWindowApi+RECT
 [void][Win32.PropWindowApi]::GetWindowRect($dialog, [ref]$rect)

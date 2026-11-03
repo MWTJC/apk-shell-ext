@@ -98,7 +98,7 @@ add_library(apkprop SHARED
   src/propsheet/dllmain.cpp
   src/propsheet/class_factory.cpp
   src/propsheet/prop_page.cpp
-  src/propsheet/page_view.cpp
+  src/propsheet/page_list.cpp
   src/propsheet/theme.cpp
   src/propsheet/worker_client.cpp
   src/propsheet/apkprop.def
@@ -131,7 +131,7 @@ target_link_libraries(propsheet_model_test PRIVATE apksx_pagemodel)
 set_target_properties(propsheet_model_test PROPERTIES OUTPUT_NAME "propsheet_model_test")
 
 # 属性页验收工具：显式加载 apkprop.dll → AddPages → PropertySheetW（不经资源管理器）
-add_executable(proptest tests/proptest.cpp)
+add_executable(proptest tests/proptest.cpp src/propsheet/page_list.cpp tests/proptest.manifest)
 target_link_libraries(proptest PRIVATE apksx_pagemodel comctl32 shell32 ole32)
 set_target_properties(proptest PROPERTIES OUTPUT_NAME "proptest")
 

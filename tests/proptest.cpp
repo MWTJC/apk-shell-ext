@@ -13,10 +13,14 @@
 #include <wincodec.h>
 
 #include <cstdio>
+#include <cwchar>
 #include <string>
 #include <vector>
 
 #include "core/com_ptr.h"
+#include "core/json_lite.h"
+#include "propsheet/page_list.h"
+#include "propsheet/page_model.h"
 
 namespace {
 
@@ -110,7 +114,7 @@ bool CaptureWindow(HWND hwnd, HBITMAP* out) {
 struct CloseArgs {
   const wchar_t* caption = nullptr;
   DWORD delay_ms = 0;
-  std::wstring capture_path;  // 非空则先截图再关窗
+  std::wstring capture_path;
   bool keep_open = false;
 };
 
@@ -149,12 +153,179 @@ DWORD WINAPI AutoCloseProc(LPVOID param) {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// --list-json <json> --capture <png>
+// 不经过属性表，直接用同一套 page_list 代码画一个 ListView 并截图。
+// 用途：清单行/分组/主题的真实呈现（本 exe 带 comctl32 v6 清单，PowerShell 宿主没有）。
+// ---------------------------------------------------------------------------
+std::wstring g_capture_path;
+
+std::string ReadAllBytes(const std::wstring& path) {
+  FILE* file = nullptr;
+  if (_wfopen_s(&file, path.c_str(), L"rb") != 0 || file == nullptr) return std::string();
+  std::string data;
+  char buffer[65536];
+  size_t got = 0;
+  while ((got = std::fread(buffer, 1, sizeof(buffer), file)) > 0) data.append(buffer, got);
+  std::fclose(file);
+  return data;
+}
+
+HBITMAP CaptureWindowRect(HWND hwnd) {
+  RECT rect{};
+  ::GetWindowRect(hwnd, &rect);
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0) return nullptr;
+
+  HDC screen = ::GetDC(nullptr);
+  if (screen == nullptr) return nullptr;
+  BITMAPINFO info{};
+  info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = width;
+  info.bmiHeader.biHeight = -height;
+  info.bmiHeader.biPlanes = 1;
+  info.bmiHeader.biBitCount = 32;
+  info.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HBITMAP bitmap = ::CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+  HDC memory = ::CreateCompatibleDC(screen);
+  if (bitmap == nullptr || memory == nullptr) {
+    if (bitmap != nullptr) ::DeleteObject(bitmap);
+    if (memory != nullptr) ::DeleteDC(memory);
+    ::ReleaseDC(nullptr, screen);
+    return nullptr;
+  }
+  HGDIOBJ old = ::SelectObject(memory, bitmap);
+  // PW_RENDERFULLCONTENT(2) 走 DWM 取图，不依赖窗口是否在最前；失败再退回屏幕像素
+  BOOL printed = ::PrintWindow(hwnd, memory, 2);
+  std::wprintf(L"capture rect=%ld,%ld %ldx%ld printwindow=%d\n",\
+               static_cast<long>(rect.left), static_cast<long>(rect.top),\
+               static_cast<long>(width), static_cast<long>(height), static_cast<int>(printed));
+  if (!printed) {
+    ::BitBlt(memory, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY);
+  }
+  ::SelectObject(memory, old);
+  ::DeleteDC(memory);
+  ::ReleaseDC(nullptr, screen);
+  return bitmap;
+}
+
+LRESULT CALLBACK PreviewProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  auto* list = reinterpret_cast<HWND>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  switch (message) {
+    case WM_SIZE: {
+      if (list != nullptr) {
+        RECT client{};
+        ::GetClientRect(hwnd, &client);
+        const int width = client.right - 16;
+        const int height = client.bottom - 16;
+        ::MoveWindow(list, 8, 8, width, height, TRUE);
+        apksx::ApplyListColumns(list, width, 96);
+      }
+      return 0;
+    }
+    case WM_TIMER: {
+      ::KillTimer(hwnd, static_cast<UINT_PTR>(wparam));
+      // 抓屏幕像素前必须确保不被其它窗口遮住：临时置顶（SetForegroundWindow 在无焦点权时无效）
+      ::SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+      ::RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+      ::Sleep(250);
+      if (!g_capture_path.empty()) {
+        HBITMAP bitmap = CaptureWindowRect(hwnd);
+        if (bitmap != nullptr) {
+          SavePng(bitmap, g_capture_path);
+          ::DeleteObject(bitmap);
+        }
+      }
+      ::SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+      ::PostQuitMessage(0);
+      return 0;
+    }
+    case WM_DESTROY:
+      ::PostQuitMessage(0);
+      return 0;
+    default: break;
+  }
+  return ::DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+int RunListPreview(const std::wstring& json_path, const std::wstring& capture_path) {
+  const std::string text = ReadAllBytes(json_path);
+  if (text.empty()) {
+    std::fwprintf(stderr, L"cannot read %s\n", json_path.c_str());
+    return 3;
+  }
+  apksx::json::ValuePtr doc;
+  apksx::Error err;
+  if (!apksx::json::Parse(text, &doc, &err) || doc == nullptr) {
+    std::fwprintf(stderr, L"bad json: %s\n", err.message.c_str());
+    return 3;
+  }
+  apksx::PageModel model;
+  if (!apksx::BuildPageModel(*doc, L"preview.apk", &model, &err)) {
+    std::fwprintf(stderr, L"model failed: %s\n", err.message.c_str());
+    return 3;
+  }
+
+  const HINSTANCE instance = ::GetModuleHandleW(nullptr);
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
+  wc.lpfnWndProc = PreviewProc;
+  wc.hInstance = instance;
+  wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+  wc.lpszClassName = L"apksx.listpreview";
+  if (::RegisterClassExW(&wc) == 0 && ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 3;
+
+  HWND hwnd = ::CreateWindowExW(0, wc.lpszClassName, L"list preview",
+                                WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN, 120, 120, 560,
+                                720, nullptr, nullptr, instance, nullptr);
+  if (hwnd == nullptr) return 3;
+
+  HWND list = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                                WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL |
+                                    LVS_SHOWSELALWAYS,
+                                8, 8, 540, 700, hwnd, nullptr, instance, nullptr);
+  if (list == nullptr) return 3;
+  ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(list));
+  ::SendMessageW(list, WM_SETFONT,
+                 reinterpret_cast<WPARAM>(::GetStockObject(DEFAULT_GUI_FONT)), FALSE);
+
+  apksx::ConfigureListView(list);
+  LVCOLUMNW column{};
+  column.mask = LVCF_TEXT | LVCF_SUBITEM | LVCF_FMT;
+  column.fmt = LVCFMT_LEFT;
+  column.pszText = const_cast<wchar_t*>(L"属性");
+  column.iSubItem = 0;
+  ListView_InsertColumn(list, 0, &column);
+  column.pszText = const_cast<wchar_t*>(L"值");
+  column.iSubItem = 1;
+  ListView_InsertColumn(list, 1, &column);
+  apksx::PopulateListView(list, model);
+
+  ::SendMessageW(hwnd, WM_SIZE, 0, 0);
+  ::ShowWindow(hwnd, SW_SHOW);
+  ::UpdateWindow(hwnd);
+
+  g_capture_path = capture_path;
+  ::SetTimer(hwnd, 1, 700, nullptr);
+  MSG message{};
+  while (::GetMessageW(&message, nullptr, 0, 0) > 0) {
+    ::TranslateMessage(&message);
+    ::DispatchMessageW(&message);
+  }
+  return 0;
+}
+
 int wmain(int argc, wchar_t** argv) {
   std::wstring file;
   std::wstring dll_path;
   int auto_close_ms = 0;
   bool verbose = false;
   std::wstring capture_path;
+  std::wstring list_json;
   bool keep_open = false;
   for (int i = 1; i < argc; ++i) {
     const std::wstring arg = argv[i];
@@ -164,6 +335,8 @@ int wmain(int argc, wchar_t** argv) {
       dll_path = argv[++i];
     } else if (arg == L"--auto-close" && i + 1 < argc) {
       auto_close_ms = _wtoi(argv[++i]);
+    } else if (arg == L"--list-json" && i + 1 < argc) {
+      list_json = argv[++i];
     } else if (arg == L"--capture" && i + 1 < argc) {
       capture_path = argv[++i];
     } else if (arg == L"--keep-open") {
@@ -172,6 +345,7 @@ int wmain(int argc, wchar_t** argv) {
       verbose = true;
     }
   }
+  if (!list_json.empty()) return RunListPreview(list_json, capture_path);
   if (file.empty()) {
     std::fwprintf(stderr,
                   L"usage: proptest --file <apk> [--dll <apkprop.dll>] [--auto-close <ms>] "
@@ -182,6 +356,12 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring dir = ExeDir();
     dll_path = dir + L"\\apkprop.dll";
   }
+
+  // 属性表要 comctl32；没有 InitCommonControlsEx 时 PropertySheetW 会直接返回 -1
+  INITCOMMONCONTROLSEX controls{};
+  controls.dwSize = sizeof(controls);
+  controls.dwICC = ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES;
+  ::InitCommonControlsEx(&controls);
 
   const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
