@@ -785,7 +785,8 @@ python tests/verify_apkinfo.py tests/fixtures/generated/*.apk    # 6/6
 
 | 证据 | 内容 |
 | --- | --- |
-| `docs/evidence/m3-native-groups.png` | v6 宿主：`权限 · 6 项`、`特性 · 4 项（0 必需）` 两条分组带都带折叠箭头 |
+| `docs/evidence/m3-native-collapsed.png` | v6 宿主（默认态）：两条分组带都收起，明细行不占位，页面不用滚动就能看全 |
+| `docs/evidence/m3-native-groups.png` | v6 宿主（早期版本，默认展开）：两条分组带都带折叠箭头 |
 | `docs/evidence/m3-native-page.png` | 真实页面（v5 宿主）：组标题降级为行，明细可读 |
 | `docs/evidence/m3-native-v5-fallback.png` | v5 降级形态：`应用 / 技术 / 权限 · 6 项 / 特性 · 4 项…` 作为行出现 |
 
@@ -793,7 +794,7 @@ python tests/verify_apkinfo.py tests/fixtures/generated/*.apk    # 6/6
 
 - 分组由 4 个变 5 个：`应用 / 技术 / 权限 / 特性 / 文件与签名`，`组件` 行留在「技术」组。
 - 明细行是"空键 + 值等于权限名"，复制时按值列取值（右键「复制值」仍然对）。
-- 折叠状态不持久化。
+- 折叠状态不持久化；默认收起（`LVGS_COLLAPSED`），用户点箭头展开只对本次会话有效。
 
 ### 踩到的坑
 

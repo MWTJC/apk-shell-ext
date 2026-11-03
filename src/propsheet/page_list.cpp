@@ -55,10 +55,11 @@ void AddGroup(HWND list, int group_id, const std::wstring& title, bool collapsib
   group.cbSize = sizeof(group);
   group.mask = LVGF_HEADER | LVGF_GROUPID;
   if (collapsible) {
-    // 默认展开；箭头由系统画、点击也由系统处理，我们不做命中测试
+    // 默认收起：权限/特性的明细很长，先给"有几项"的概览，需要时点箭头展开。
+    // 箭头由系统画、点击也由系统处理，我们不做命中测试。
     group.mask |= LVGF_STATE;
-    group.stateMask = LVGS_COLLAPSIBLE;
-    group.state = LVGS_COLLAPSIBLE;
+    group.stateMask = LVGS_COLLAPSIBLE | LVGS_COLLAPSED;
+    group.state = LVGS_COLLAPSIBLE | LVGS_COLLAPSED;
   }
   group.pszHeader = const_cast<wchar_t*>(title.c_str());
   group.cchHeader = static_cast<int>(title.size());
