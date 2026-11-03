@@ -79,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 ## 当前状态
 
 **M1 已完成（2026-11-03）**：`.apk` 缩略图闭环全部落地——CMake/Ninja 工程（`/MT`、`/W4 /WX`）、
-`apkthumb.dll`（279 KB，只导入系统 DLL）、`tools\register.ps1`（HKCU 免 UAC，卸载零残留）、
+`apkthumb.dll`（285 KB，只导入系统 DLL；M2 加流式 arsc 后 301 KB）、`tools\register.ps1`（HKCU 免 UAC，卸载零残留）、
 自建正/负缓存、`tests\thumbtest.exe` 验收工具、`tests\gen_fixtures.py`（aapt2 造真实包）。
 
 **实测数字**（[verification.md §10](docs/verification.md)）：100 个包冷 P50 8.2 ms / P95 14.9 ms，热 P50 1.3 ms；
@@ -90,15 +90,30 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 这迫使解析核心改成"数据源无关"（文件 / 流），并加了一条带中央目录摘要的缓存键——见
 [ADR-0005](docs/adr/0005-isolated-thumbnail-host-and-stream-input.md)。
 
-**下一步 M2**：解析核心 + `apkinfo.exe --json`，把全量元数据搬出 DLL，并**关闭 TD-001**（ARSC 改分段流式）。
+**M2 已完成的四件（2026-11-04）**
 
-**下次开工清单（M2，按顺序）**
+1. `apkinfo.exe --json`（schema v1 的 `file`/`app`/`icon`/`components`/`permissions`/`diagnostics`），
+   label 走 arsc 解析，`--hash=sha256` 与 `certutil` 一致，退出码 0/2/3 与 8 s watchdog 均实测。
+2. **TD-001 关闭**：`resources.arsc` 改为在 Stored 条目上开窗口流式跳读；19.7 MB 真表 0.7–1.5 ms。
+3. 大包测速：1.26 GB / 1.92 GB 的真包解析 3.8–6.9 ms，缩略图 37–41 ms（经 dllhost 172 ms）。
+4. 与 `aapt2 dump badging` 逐字段交叉校验 **11/11 一致**（含混淆包、自适应图标包、GB 级包）。
 
-1. `src/core` 补齐：签名块（v2/v3 方案识别 + 证书摘要）、权限/组件计数、ABI/密度/locale 汇总、
-   `--hash=sha256`（与 `certutil` 对照）、JSON v1 输出（字段只增不改）。
-2. ARSC 分段流式读取，删除"整读 ≤ 8 MB"路径 → TD-001 关闭，且 ≥ 32 MB 资源表仍满足 V2。
-3. `.apks/.xapk/.apkm`（外层 ZIP + `base.apk`）顺带做掉（M4a，复用 APK reader）。
-4. 安全限额落地 + 3 个构造样本（条目炸弹 / 超大 arsc / 路径穿越）的拒绝用例。
+**下一步（M2 剩余，建议顺序）**
+
+1. **签名块**：v1（`META-INF/*.RSA|DSA|EC` 的 PKCS#7）+ v2/v3（APK Signing Block）方案识别与证书 SHA-256。
+   设计提示见 [docs/roadmap.md](docs/roadmap.md) 的「M2 · 接力说明」。
+2. `features`（`uses-feature`）与 `splits`（`.apks` 分包）两组字段 → schema v1 冻结。
+3. TD-002：deflate 的大 arsc（> 8 MB）目前跳过，需要可重定位的流式解压。
+4. V8 恶意样本回归、长跑（句柄/负缓存过期）。
+
+**接力说明**（下一会话从这里开始）
+
+- 构建：`tools\build.cmd Release` → `out\x64\{apkthumb.dll, apkinfo.exe, thumbtest.exe}`。
+- 夹具：`python tests\gen_fixtures.py`（4 正常 + 8 坏包）、`python tests\gen_big_arsc.py`（19.7 MB 真 arsc + deflate 变体）。
+- 真实样本：`tests\fixtures\real\`（3 个普通包 + `big\` 里 1.26 G / 1.92 G 各一个），**gitignore，不入库**。
+- 验收：`python tests\verify_apkinfo.py <apk...>`（对 aapt2）、`out\x64\thumbtest.exe --dir <目录> --json`、
+  `out\x64\thumbtest.exe --shell --file <apk>`（走 Explorer 管线）、`out\x64\apkinfo.exe --json <apk>`。
+- 扩展当前**已注册**（HKCU）：`powershell -File tools\register.ps1 -Uninstall` 可撤；诊断日志需手动开 `%TEMP%\apk-shell-ext.debug.on`。
 
 ## 变更纪律（写给自己）
 

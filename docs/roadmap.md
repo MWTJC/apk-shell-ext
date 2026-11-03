@@ -113,6 +113,34 @@ flowchart LR
   越界垃圾让该包的 type 全部对不上号 —— 表现是"图标静默消失、只走启发式"。
   在 `qwxds-1.6.1.apk`（混淆包）上暴露，修复后 11/11 包与 aapt2 一致。
 
+**M2 完成度（2026-11-04 收尾，下一会话从这里继续）**
+
+| 交付项 | 状态 |
+| --- | --- |
+| `apkinfo.exe --json --schema=1`（file/app/icon/components/permissions/diagnostics） | ✅ |
+| ZIP64 / AXML / ARSC（含 sparse、Offset16、语言/密度汇总） | ✅ |
+| ARSC 分段流式（TD-001） | ✅ 19.7 MB 真表 0.7–1.5 ms |
+| `--hash=sha256`（与 certutil 一致）、退出码 0/2/3、8 s watchdog | ✅ |
+| 与 `aapt2 dump badging` 交叉校验 | ✅ 11/11 |
+| `signature`（v1 / v2 / v3 方案 + 证书摘要） | ⬜ 下一步 |
+| `features`（uses-feature）、`splits`（.apks） | ⬜ |
+| TD-002：deflate 的大 arsc | ⬜ |
+
+**下一步：签名块（实现要点，来自 AOSP apksig 的公开格式，落地时必须逐项核对）**
+
+1. `apkthumb`/`apkinfo` 都要知道中央目录的偏移：给 `ZipReader` 加 `cd_offset()/cd_size()` getter（目前是私有成员）。
+2. APK Signing Block 紧贴在中央目录之前，形状是
+   `[uint64 size][id(4)+value(len) 序列][uint64 size]["APK Sig Block 42"(16 B)]`，两处 size 相等，用
+   `cd_offset - size` 反推块起点；magic 不匹配就当作没有 v2/v3。
+3. 块内 id：v2 = `0x7109871a`、v3 = `0xf05368c0`、v3.1 = `0x1b93ad61`（AOSP `ApkSigningBlockUtils`；
+   实现时用真实包反查一遍再写进代码）。没找到 v2/v3 才是 v1-only。
+4. value 是“嵌套的长度前缀序列”：signers → signed data → digests + certificates。
+   只要证书列表（每张 X.509 DER）即可算出摘要：SHA-256(DER) 就是用户在“签名摘要”一栏看到的值。
+5. v1：`META-INF/*.(RSA|DSA|EC)` 是 PKCS#7；用 `CryptQueryObject` 取证书，取第一条。
+   两者都失败 → `signature` 字段整体省略（JSON 里“没有”比 `null` 更好判断）。
+6. 验收：三张表（v1-only 老包 / v2 包 / v3 包）各至少一个真实样本；证书 SHA-256 与 `apksigner verify
+   --print-certs` 对照。**手头样本要先确认覆盖了这三种情况**，缺哪种就现造一个（v1-only 可以用老工具链重签名）。
+
 **风险 / 已批准的技术债**：ARSC 分段读的实现复杂度高于预期 → M1 先"整读 `resources.arsc`（≤ 8 MB；超限回落文件名启发式）"，登记为 **TD-001**（见 §5），M2 必须关闭。该债已于 2026-11-03 获批准。
 
 ## M2 · 解析核心 + worker

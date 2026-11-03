@@ -412,6 +412,9 @@ ealig\*.apk
 
 含 `f_bigarsc_real.apk`（19.7 MB 表）、`tdeflate_arsc.apk`（deflate 回退）、两个 GB 级真包。
 
+体积：`apkthumb.dll` 308,736 B（301 KB，M1 为 291,840 B），`apkinfo.exe` 336,384 B（329 KB），
+静态 CRT 不变（导入表仍只有系统 DLL）。
+
 ### 过程中发现并修复的隐蔽 bug
 
 流式读包头时缓冲区只有 256 B，却访问偏移 284 的 `Package.typeIdOffset` —— 越界读到栈垃圾，
