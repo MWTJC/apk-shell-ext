@@ -69,7 +69,7 @@ flowchart LR
 
 | 项 | 约定 |
 | --- | --- |
-| 实现接口 | `IShellPropSheetExt` + `IPersistFile`（+ 可选 `IObjectWithSite`） |
+| 实现接口 | `IShellPropSheetExt` + `IPersistFile` + **`IShellExtInit`**（M3 实测：这个 build 在建页前先 QI 它，缺了就直接跳过 handler） |
 | 注册 | `HKCR\.apk\shellex\PropertySheetHandlers\ApkInfo` 等，按扩展名逐个注册 |
 | `AddPages` | ≤ 50 ms：`CreatePropertySheetPage` 后立刻返回；解析任务在 `PSM_INITDIALOG` 之后 `PostMessage` 启动 |
 | 页面 | 单页「安装包信息」；顶部大图标 + 应用名；字段分 4 组（应用 / 技术 / 权限与组件 / 文件与签名） |
@@ -79,6 +79,15 @@ flowchart LR
 | DPI/主题 | 按 `WM_DPICHANGED` 缩放；深色模式读 `AppsUseLightTheme`，控件用 `SetWindowTheme`/`DwmSetWindowAttribute` |
 
 **为什么不用自定义 `IPropertyStore`**：见 ADR-0002。属性页里的字段不参与排序/列，不需要进属性系统。
+
+**M3 实施补充（2026-11-04）**
+
+- 页面是**全自绘**（`src/propsheet/page_view.cpp`），模板里零控件；深色与 DPI 全在自己手里。
+- 参数经 `IShellExtInit::Initialize` 的 `CF_HDROP` 与 `IPersistFile::Load` **两条路都接**：前者是这个 build 的必经之路，
+  后者保证其它宿主（脚本/测试工具）也能用。
+- worker 挂在 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job 上：页面一关，job 句柄一关，worker 立刻消失；
+  取消不等子进程自己退（`TerminateJobObject`）。
+- 字段顺序与分组冻结在 [m3-property-page.md §2](m3-property-page.md)。
 
 ### 2.3 `apkinfo.exe`（worker）
 

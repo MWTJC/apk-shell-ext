@@ -1,6 +1,6 @@
 # M3 · 属性页（`apkprop.dll`）设计方案
 
-> 状态：**待评审**（本文只定方案与验收；评审通过后再写代码，代码落地时必须回头改这里的"实测"数字）
+> 状态：**已评审、已实现（2026-11-04）**。§12 的四项决策见文末"决策记录"，实现与实测见 §14。
 > 相关：[architecture.md §2.2/§4](architecture.md)、[roadmap.md · M3](roadmap.md)、[ADR-0003](adr/0003-out-of-proc-parser.md)、[design.md · P4](design.md)
 > 本文不新增 ADR：**进程边界与调用频率都不变**（worker 仍是每次调用一个进程、属性页仍只在"打开属性"时触发），
 > 按 project 纪律属于"不需要 ADR"的改动。
@@ -232,3 +232,64 @@ tests/propsheet_model_test.cpp   直接驱动 page_model（无 GUI），用现�
 | P3 | explorer 的深色接口在不同 build 上表现不一致 | 只依赖公开的 `AppsUseLightTheme` 注册表值 + 自绘，不调用未公开的 `SetPreferredAppMode` |
 | P4 | 杀软拦截 `CreateProcess` 使冷开变慢/失败 | 错误态明确提示；M5 代码签名后复测 |
 | P5 | 属性页 handler 在 explorer 里崩溃 | 全部入口 `try/catch`；解析在 worker；`/guard:cf` 已有 |
+
+## 14. 实施记录（2026-11-04）
+
+### 落地清单
+
+```
+src/propsheet/
+├─ dllmain.cpp / class_factory.cpp   CLSID {A7C4E1B0-…-6D1C8E4A7B02}、DllGetClassObject/CanUnloadNow
+├─ prop_page.cpp                      IShellPropSheetExt + IPersistFile + IShellExtInit、线程、取消、剪贴板
+├─ worker_client.{h,cpp}             QuoteArg / CreateProcessW / Job(KILL_ON_JOB_CLOSE) / 管道 / 超时
+├─ page_model.{h,cpp}                JSON → 行模型（wchar_t，无 UI 依赖，可单测）
+├─ page_view.{h,cpp}                 布局 + 全自绘（组标题/行/子项/省略号/底栏按钮/命中测试）
+├─ theme.{h,cpp}                     6 个配色令牌 + SPI 字体 + DPI
+└─ apkprop.{rc,def,h}                对话框模板（无控件）、字符串、VERSIONINFO、导出表
+src/core/json_lite.{h,cpp}           最小 JSON 解析（进 explorer 的代码不引第三方）
+tests/propsheet_model_test.cpp       行模型单测（26 条断言，不需要窗口）
+tests/proptest.cpp                   显式加载 DLL → AddPages → PropertySheetW，可直接截图
+tools/capture-propsheet.ps1          打开属性对话框 → 选标签 → 可选点击/滚轮 → 只截该窗口
+```
+
+### 计划外发现（必须记住）
+
+**`IShellExtInit` 是硬要求。** 实测日志（本机 Windows 11 `10.0.26300`）：
+
+```
+QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShellExtInit=000214E8)
+```
+
+在此之前，handler 会被创建、但 `IPersistFile::Load` 与 `AddPages` **一次都不会被调用**，属性页里也就没有这一页。
+补上 `IShellExtInit::Initialize`（从 `CF_HDROP` 取第一个路径）之后，`Load → AddPages → 页面出现` 全通。
+只按老文档实现 `IPersistFile` 的 handler，在这个 build 上就是"注册成功但不显示"。
+
+**注册表不需要 `Approved` 列表、也不需要 `HKCR\*`。** 只写
+`HKCR\.apk\shellex\PropertySheetHandlers\ApkInfo` + `HKCR\CLSID\{…}\InprocServer32`（HKCU 即可）就生效；
+排查时临时加过 `\*` 与 `SystemFileAssociations`、以及 `Approved` 条目，逐一移除后仍正常，已全部撤销。
+
+### 与方案的偏差
+
+1. **头部图标加了"本地解一个条目"的退路**：缩略图缓存在 dllhost/stream 模式下用的键与"按路径"不同，
+   属性页不一定命中。现在先查缓存，未命中就在 worker 线程里用 core 解一个图标条目（与 `apkthumb` 同一套代码，
+   仍然只读中央目录 + 一个条目，不做全量解析）。图标解码失败就画占位方块。
+2. **`PSM_INITDIALOG` 之后先画骨架**：label 用文件名兜底、组标题为"正在解析…"，避免空窗口。
+3. 错误态的行用"空键"绘制（从左边距开始），不再占键列。
+
+### 实测（本机，深色主题 100% DPI）
+
+| 场景 | 结果 | 证据 |
+| --- | --- | --- |
+| `aida64-1.94.apk`（7.9 MB） | 解析完成 **140–188 ms**；哈希 **172 ms** | `docs/evidence/m3-propsheet-light.png`、`m3-propsheet-hash.png` |
+| `base2_1.92G.apk`（1.79 GB） | 解析完成 **157 ms** | `docs/evidence/m3-propsheet-big.png` |
+| 展开权限（18/6 项） | 行内展开，子项缩进 | `docs/evidence/m3-propsheet-expanded.png` |
+| 损坏包（`notzip.apk` 改名） | 页内报"未找到 ZIP 结束记录"，带重试/复制 JSON | `docs/evidence/m3-propsheet-error.png` |
+| 关闭时正在算哈希（1.92 GB × 3 次） | 关窗后 `Get-Process apkinfo` = 0，无残留 | 见 verification.md R-0006 |
+| 行模型单测 | 26/26 | `propsheet_model_test --selftest` |
+
+### 已知限制 / 未验证
+
+1. 无障碍：自绘列表对 Narrator 不友好（§13 P1 已登记，v1 接受）。
+2. 150% / 200% DPI、浅色主题未截图验证（当前机器是深色 100%）。
+3. 100 次开关的句柄/私有提交趋势、`worker 人为 abort`（需要新增测试钩子）未做。
+4. 中英文双语只做了中文文案；`.rc` 的 STRINGTABLE 留了 ID，英文在 M5 一起做。

@@ -1,0 +1,4 @@
+LIBRARY apkprop
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE

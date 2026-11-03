@@ -1,0 +1,48 @@
+// apkprop.dll resources: property page template + page title + VERSIONINFO.
+// The template has no controls at all: the whole page is owner-drawn
+// (docs/m3-property-page.md section 3). 240x240 DLU is about 420x450 px at 96 DPI.
+#pragma code_page(65001)
+#include <windows.h>
+
+// 与 src/propsheet/apkprop.h 保持一致（RC 只认 #define）
+#define IDD_APKPROP 101
+#define IDS_PAGE_TITLE 201
+
+IDD_APKPROP DIALOGEX 0, 0, 240, 240
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL
+EXSTYLE WS_EX_CONTROLPARENT
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+END
+
+STRINGTABLE
+BEGIN
+    IDS_PAGE_TITLE "安装包信息"
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "FileDescription", "APK shell extension - property page"
+            VALUE "FileVersion", "0.1.0.0"
+            VALUE "InternalName", "apkprop"
+            VALUE "OriginalFilename", "apkprop.dll"
+            VALUE "ProductName", "apk-shell-ext"
+            VALUE "ProductVersion", "0.1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

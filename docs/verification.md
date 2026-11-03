@@ -529,3 +529,61 @@ aapt2 会把"隐含特性"同时打成 `uses-feature` 与 `uses-implied-feature`
 2. **不做摘要校验**，所以 `signature` 只代表"块存在"，不代表签名有效（`base2` 就是例子）。
 3. **EC / DSA 的 v1 块**没有样本（现有样本全是 RSA）。
 4. `splits`（`.apks` 分包）与 `permissions[].level` 仍未实现；`splits` 随 M4a 一起做。
+
+## 14. R-0006 记录（M3 · 属性页，2026-11-04）
+
+### 环境
+
+| 项 | 值 |
+| --- | --- |
+| OS | Windows 11 `10.0.26300` |
+| 主题 / DPI | 深色（`AppsUseLightTheme=0`）/ 100% |
+| 构建 | Release `/MT /W4 /WX`，`apkprop.dll` 侧链接 `comctl32 shell32 ole32 msimg32` |
+| 注册 | `HKCU\Software\Classes`（免 UAC），`-Feature Propsheet` |
+| 样本 | `aida64-1.94.apk`（7.9 MB · v1+v2+v3）、`base2_1.92G.apk`（1.79 GB）、`bad/notzip.apk` |
+
+### 命令
+
+```bat
+tools\build.cmd Release
+out\x64\propsheet_model_test.exe --selftest
+powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Install -Feature Propsheet
+powershell -ExecutionPolicy Bypass -File tools\capture-propsheet.ps1 ^
+    -ApkPath <apk> -OutPng docs\evidence\m3-propsheet-light.png
+powershell -ExecutionPolicy Bypass -File tools\capture-propsheet.ps1 ^
+    -ApkPath <apk> -OutPng ... -ClickPoint "272,590" -WheelClicks 3   :: 点"计算 SHA-256"后滚到底
+out\x64\proptest.exe --file <apk> --verbose                          :: 不经资源管理器，直接建页
+```
+
+### 结果
+
+| # | 判据 | 结果 |
+| --- | --- | --- |
+| 1 | 属性页出现「安装包信息」标签 | ✅（标签条第 2 个；`tools/capture-propsheet.ps1` 截图） |
+| 2 | 字段与 `apkinfo --json` 一致 | ✅ 应用/技术/权限与组件/文件与签名 四组逐项对照（`m3-propsheet-light.png`），SHA-256 一栏与 `--hash=sha256` 相同 |
+| 3 | 冷开耗时 | ✅ 7.9 MB：**140–188 ms**（页脚"解析完成 · N ms"）；1.79 GB：**157 ms** |
+| 4 | 按需哈希 | ✅ 点击后页脚"哈希已计算（172 ms）"，SHA-256 行填 64 位 hex；1.92 GB 包约 1.2 s |
+| 5 | 展开权限/特性 | ✅ 6 项权限逐条列出（`m3-propsheet-expanded.png`） |
+| 6 | 损坏包 | ✅ 页内"未找到 ZIP 结束记录（不是有效 ZIP）"+ 重试/复制 JSON，explorer 不崩（`m3-propsheet-error.png`） |
+| 7 | 解析中关窗（哈希 1.92 GB，3 次） | ✅ 关窗后 `Get-Process apkinfo` 计数 = 0（Job `KILL_ON_JOB_CLOSE` + `TerminateJobObject`） |
+| 8 | 行模型单测 | ✅ 26/26（`propsheet_model_test --selftest`，含坏 JSON/Unicode/签名缺失路径） |
+| 9 | 卸载零残留 | ⬜ 未在本轮跑（`-Uninstall` 的备份/回滚逻辑沿用 R-0002 的机制） |
+
+### 关键发现
+
+**这个 build 的 shell 在建页之前先 `QI(IShellExtInit)`（`IID 000214E8`）。** 只实现
+`IShellPropSheetExt + IPersistFile` 时：handler 会被创建（`CreateInstance` 返回 S_OK），
+但 `IPersistFile::Load` 与 `AddPages` 一次都不会被调用，属性页里没有这一页，事件日志与 UI 都不报错。
+补齐 `IShellExtInit::Initialize`（从 `CF_HDROP` 取路径）后一切正常。详见
+[docs/m3-property-page.md §14](m3-property-page.md)。
+
+注册表只需要 `HKCR\.apk\shellex\PropertySheetHandlers\ApkInfo` + `HKCR\CLSID\{…}\InprocServer32`；
+排查时临时加的 `HKCR\*`、`SystemFileAssociations\.apk`、`Approved` 条目均已撤销，移除后页面仍正常。
+
+### 未验证（不许当作通过）
+
+1. 150% / 200% DPI 与浅色主题（当前机器只有深色 100%）。
+2. 连续开关 100 次的句柄/私有提交趋势（只做了 3 次中的取消路径）。
+3. `worker 人为 abort` 的 UI 文案（需要新增 `APKSX_TEST_ABORT_MS` 钩子）。
+4. 卸载后的注册表 diff = 0（V6 回归）。
+5. 无障碍（自绘列表对 Narrator 不友好，已登记为 P1）。

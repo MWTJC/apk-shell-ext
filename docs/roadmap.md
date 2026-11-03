@@ -20,7 +20,7 @@ flowchart LR
 | M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
 | M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON + aapt2 交叉校验通过；**TD-001 已关闭**；**签名块与 features 已落地**；`splits` 未做 |
-| M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | 🟡 设计方案待评审（[m3-property-page.md](m3-property-page.md)） |
+| M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | 🟡 已实现并通过主要验收（[R-0006](verification.md)）；DPI/主题/长跑未测 |
 | M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
 
@@ -186,7 +186,8 @@ flowchart LR
 
 ## M3 · 属性页
 
-**设计方案**：[m3-property-page.md](m3-property-page.md)（2026-11-04，待评审；评审通过后才写代码）
+**设计方案**：[m3-property-page.md](m3-property-page.md)（2026-11-04 评审通过）。
+**实施记录**：见该文档 §14 与 [verification.md R-0006](verification.md)。
 
 **范围**：`apkprop.dll`，只做「安装包信息」单页。
 
@@ -208,6 +209,20 @@ flowchart LR
 - **worker 人为 abort**：页面显示"解析器异常退出"，explorer 存活。
 
 **退出条件**：属性页在 3 个真实包 + 2 个损坏包上表现符合预期；冻结页面字段顺序（之后只加不删）。
+
+**M3 完成度（2026-11-04）**
+
+| 交付项 | 状态 |
+| --- | --- |
+| `IShellPropSheetExt` + `IPersistFile` + **`IShellExtInit`**（后者是这个 build 的硬要求） | ✅ |
+| 全自绘单页（4 组字段、展开、滚动、复制、快捷键） | ✅ |
+| 异步：`AddPages` 零 IO → 线程 → Job 里的 `apkinfo.exe` → `WM_APP` 回填 | ✅ |
+| 错误态（缺 worker / 退出码 2 / 超时 / 崩溃 / 输出异常 / 不支持的格式） | ✅ 页内文案 + 重试 |
+| 按需 SHA-256（按钮） | ✅ 172 ms（7.9 MB）/ ~1.2 s（1.9 GB） |
+| 注册脚本 `-Feature Propsheet`（HKCU，免 UAC） | ✅ |
+| 深色模式 | ✅（当前机器只有深色） |
+| 150%/200% DPI、浅色主题、100 次开关句柄、worker abort、卸载 diff | ⬜ 未测 |
+| 中英双语 | ⬜ M5 |
 
 ## M4 · 全格式
 

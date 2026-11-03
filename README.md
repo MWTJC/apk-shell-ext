@@ -4,9 +4,9 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 已完成（R-0002）；M2 进行中**（`apkinfo.exe --json` 可用；**TD-001 已关闭**；**签名块与 uses-feature 已落地**；`splits` 未做） |
+| 阶段 | **M1 ✅（R-0002）· M2 收尾中**（签名块/uses-feature 已落地，`splits` 随 M4a）**· M3 ✅ 主体完成**（`apkprop.dll`，见 R-0006） |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
-| 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，🟡 骨架可用）· `apkprop.dll`（属性页，M3） |
+| 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，✅ JSON v1）· `apkprop.dll`（属性页，✅） |
 | 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
 
 ## 一句话设计
@@ -35,7 +35,7 @@ apk-shell-ext/
 ├─ src/
 │  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、签名块、图标定位、WIC、缓存）— ✅ M1/M2
 │  ├─ thumbs/       IThumbnailProvider 壳扩展 — ✅ M1
-│  ├─ propsheet/    IShellPropSheetExt 壳扩展 — M3
+│  ├─ propsheet/    IShellPropSheetExt 壳扩展（自绘单页）— ✅ M3
 │  ├─ worker/       apkinfo.exe（JSON 输出）— M2
 │  └─ third_party/  miniz（raw deflate，MIT，只编 C 源）
 ├─ tools/           build.cmd（vcvars+CMake+Ninja）、register.ps1（装/卸）
@@ -79,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 | [docs/formats.md](docs/formats.md) | APK/APKS/XAPK/APKM/AAB/IPA/HAP/APPX 的容器与图标位置矩阵、安全限额 |
 | [docs/roadmap.md](docs/roadmap.md) | **实现阶段 M0–M5**、每阶段交付/验收/退出条件、风险登记 |
 | [docs/verification.md](docs/verification.md) | 把「无感」变成可测判据：ProcMon 配方、耗时与内存预算、记录表（R-0002 = M1 实测） |
-| [docs/m3-property-page.md](docs/m3-property-page.md) | **M3 属性页设计方案**（待评审：布局、自绘、worker 调用、错误态、DPI/深色、验收） |
+| [docs/m3-property-page.md](docs/m3-property-page.md) | **M3 属性页**：设计方案（已评审）+ 实施记录（`IShellExtInit` 硬要求、图标退路、实测数字） |
 | [docs/adr/](docs/adr/README.md) | 架构决策记录（5 条；前四条冻结，0005 由 M1 实测得出） |
 
 ## 当前状态
@@ -96,6 +96,18 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 这迫使解析核心改成"数据源无关"（文件 / 流），并加了一条带中央目录摘要的缓存键——见
 [ADR-0005](docs/adr/0005-isolated-thumbnail-host-and-stream-input.md)。
 
+**M3 已完成（2026-11-04，记录 [verification.md R-0006](docs/verification.md)）**
+
+`apkprop.dll`：右键属性里的「安装包信息」单页，全自绘（4 组字段 + 展开 + 滚动 + 逐行复制）。
+`AddPages` 零 IO，`PSM_INITDIALOG` 之后起线程 → `apkinfo.exe`（挂在带 `KILL_ON_JOB_CLOSE` 的 Job 上）→
+JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJobObject`。
+实测：7.9 MB 包 **140–188 ms** 出全页，1.79 GB 包 **157 ms**，按需 SHA-256 172 ms（1.9 GB 约 1.2 s），
+关闭时正在算哈希 ×3 次无残留进程。
+
+**计划外发现**：这个 Windows build 在建页之前先 `QI(IShellExtInit)`，只实现 `IShellPropSheetExt + IPersistFile`
+的 handler 会被**静默跳过**（`AddPages` 根本不会被调用）。已补 `IShellExtInit::Initialize`，见
+[docs/m3-property-page.md §14](docs/m3-property-page.md)。
+
 **M2 已完成的六件（2026-11-04）**
 
 1. `apkinfo.exe --json`（schema v1 的 `file`/`app`/`icon`/`components`/`permissions`/`diagnostics`），
@@ -108,11 +120,11 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
    注意 `scheme` 的语义是"检测到的签名块"而非"校验通过"（见 [architecture.md §2.3](docs/architecture.md)）。
 6. `features`（`uses-feature` + `android:required`）→ 与 aapt2 **11/11 一致**。
 
-**下一步（M2 剩余，建议顺序）**
+**下一步（建议顺序）**
 
-1. `splits`（`.apks/.xapk/.apkm` 分包列表）→ 与 M4a 一起做；`.apk` 单包不产生该字段。
-2. TD-002：deflate 的大 arsc（> 8 MB）目前跳过，需要可重定位的流式解压。
-3. V8 恶意样本回归、长跑（句柄/负缓存过期）。
+1. M3 剩余验收：150%/200% DPI、浅色主题、100 次开关的句柄趋势、`worker abort` 文案、卸载 diff。
+2. M4a：`.apks/.xapk/.apkm`（外层 ZIP + base.apk），顺带补 schema 的 `splits`。
+3. M2 尾巴：TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
 
 **接力说明**（下一会话从这里开始）
 
