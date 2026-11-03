@@ -1,5 +1,7 @@
 param(
-    [string]$OutPng = 'C:\Users\TJC\AppData\Local\hermes\cache\scratch\explorer_thumbnails.png'
+    [string]$OutPng = 'C:\Users\TJC\AppData\Local\hermes\cache\scratch\explorer_thumbnails.png',
+    [string]$TitleFilter = '',
+    [int]$ViewWaitMs = 4500
 )
 # Switches the focused Explorer window to "Large icons" via UI Automation,
 # waits for thumbnails to render, then captures that window only.
@@ -11,6 +13,7 @@ if (-not ('Win32.CaptureApi' -as [type])) {
     Add-Type -Namespace Win32 -Name CaptureApi -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 '@
 }
@@ -20,11 +23,14 @@ $labelView = & $u @(0x89C6, 0x56FE)          # shi tu   = "view"
 $labelView2 = & $u @(0x67E5, 0x770B)         # cha kan  = "view" (Win10 wording)
 $labelLarge = & $u @(0x5927, 0x56FE, 0x6807) # da tu biao = "large icons"
 
-$proc = Get-Process explorer | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -First 1
+$proc = Get-Process explorer -ErrorAction SilentlyContinue | Where-Object {
+    $_.MainWindowTitle -ne '' -and ($TitleFilter -eq '' -or $_.MainWindowTitle -like "*$TitleFilter*")
+} | Select-Object -First 1
 if ($null -eq $proc) { throw "no Explorer window found" }
 $hwnd = $proc.MainWindowHandle
+[void][Win32.CaptureApi]::ShowWindow($hwnd, 3)
 [void][Win32.CaptureApi]::SetForegroundWindow($hwnd)
-Start-Sleep -Milliseconds 300
+Start-Sleep -Milliseconds 700
 
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 $buttonType = New-Object System.Windows.Automation.PropertyCondition(
@@ -68,13 +74,19 @@ try {
     catch { Write-Host "could not activate: $_" }
 }
 
-Start-Sleep -Milliseconds 4500   # thumbnails render (first pass may hit dllhost)
+Start-Sleep -Milliseconds $ViewWaitMs   # thumbnails render (first pass may hit dllhost)
 
-$r = New-Object Win32.Api+RECT
-[void][Win32.CaptureApi]::GetWindowRect($hwnd, [ref]$r)
+$r = New-Object Win32.CaptureApi+RECT
+$rectOk = [Win32.CaptureApi]::GetWindowRect($hwnd, [ref]$r)
 $w = $r.Right - $r.Left
 $h = $r.Bottom - $r.Top
-if ($w -le 0 -or $h -le 0) { throw "bad window size ${w}x${h}" }
+if (-not $rectOk -or $w -le 0 -or $h -le 0) {
+    # MainWindowHandle 对 shell 拥有的窗口可能是 0/失效；窗口已最大化，退回整屏截图
+    Write-Host "[capture] window rect unusable (${w}x${h}), capturing the full screen instead"
+    $r.Left = 0; $r.Top = 0
+    $w = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Width
+    $h = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Height
+}
 $bmp = New-Object System.Drawing.Bitmap($w, $h)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)

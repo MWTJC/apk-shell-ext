@@ -396,10 +396,16 @@ python tests/gen_big_arsc.py
 `--hash=sha256` 单独计：1.92 GB 用 **1.16 s**（磁盘吞吐限制），只在属性页显式请求时发生。
 对照 roadmap 的"≤ 500 MB 包 ≤ 1.5 s"：解析路径 5 ms 级别，余量极大。
 
+两个 GB 级包在**资源管理器大图标视图**下的实际显示（流的同一套代码路径）：
+[docs/evidence/m2-big-apk-thumbnails.png](evidence/m2-big-apk-thumbnails.png)
+—— 1.26 GB 的 Arcaea 国服与 1.92 GB 的少女前线2 都正确取出包内正方形图标。
+
 ### 回归：11 个包与 aapt2 一致
 
 ```
-python testserify_apkinfo.py testsixtures\generated\*.apk testsixtureseal\*.apk testsixturesealig\*.apk
+python testserify_apkinfo.py testsixtures\generated\*.apk testsixtures
+eal\*.apk testsixtures
+ealig\*.apk
 ...
 11/11 packages matched
 ```
