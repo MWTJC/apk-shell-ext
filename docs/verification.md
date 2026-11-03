@@ -640,3 +640,56 @@ powershell -File tools\capture-propsheet.ps1 -ApkPath aida64-1.94.apk -OutPng do
 - 仍然成立：全自绘只决定**排版**（行高、键列宽、省略号、展开、滚动、命中测试）。无障碍仍弱（P1）。
 - 未验证：**150% / 200% DPI**；第三方"深色属性页"宿主（如未来系统支持）下的取色——代码路径是同一套
   `WM_CTLCOLOR*` 查询，但没有那样的宿主可测。
+
+## 16. R-0008 记录（M3 · 快速划过闪烁修复，2026-11-04）
+
+### 现象（用户反馈）
+
+在页内快速上下滑动时，**内容整页闪烁**。
+
+### 定位
+
+不是"自绘路线"的必然结果，是这版实现的三个问题叠加：
+
+1. `WM_MOUSEMOVE` 里一旦 hover 行变化就 `InvalidateRect(hwnd, nullptr, FALSE)` —— **整窗重绘**。
+   快滑时每跨一行一次，一秒几十次；
+2. 绘制**直写窗口 DC**，没有双缓冲，整窗重画时能看到"先刷底 → 再逐行 → 再底栏"的中间态；
+3. tooltip 在每次鼠标移动时 `TTM_TRACKACTIVATE` 开关，长值行/短值行交替经过时也会闪。
+
+### 修复
+
+| 项 | 改法 |
+| --- | --- |
+| 重绘范围 | `PageView::ItemClientRect()` 给出每行的客户区矩形；hover/选中变化只 `InvalidateRect` **旧行 + 新行** |
+| 闪烁 | 页面画到缓存的兼容位图（`EnsureBuffer`，尺寸变化才重建），`WM_PAINT` 结束前一次 `BitBlt` |
+| tooltip | 改为**悬停停留 600 ms** 才出现（`SetTimer` + `WM_TIMER`），并在同一行内移动时只跟随位置；`WM_MOUSELEAVE` 立即隐藏 |
+| tooltip 触发条件 | 不再按字符数猜（旧的 44 字阈值），改成"上一帧这一行**确实被省略号截断**"（`PageView::ItemTruncated()`，Painting 时量宽度记录） |
+| 光标 | 只在"手形/箭头"发生变化时 `SetCursor` |
+
+### 实测（本机，深色系统主题，100% DPI）
+
+```
+powershell -File tools\capture-propsheet.ps1 -ApkPath aida64-1.94.apk -HoverSweep 40 -WaitMs 400 -SkipUia
+（诊断开关打开时，每次 WM_PAINT 记录 GetUpdateRect 的尺寸）
+```
+
+| 指标 | 修复前（代码路径） | 修复后（实测） |
+| --- | --- | --- |
+| 每次 hover 变化的重绘区域 | 整窗 `429 × 533` ≈ **229k px** | 两行合并 `429 × 52` ≈ **22k px**（个别单行 `429 × 23`） |
+| 绘制目标 | 窗口 DC（可见中间态） | 内存位图 → 一次 BitBlt |
+| 40 步扫动产生的 WM_PAINT | 每次跨行一次整窗 | 26 次，其中 24 次是 1–2 行的小区域 |
+
+tooltip：日志显示 `trunc=1 → TTM_TRACKACTIVATE=1`（长度 97 字符的证书主题），
+说明"被截断才提示、停留后才出现"的逻辑成立；**popup 气泡本身看不进窗口截图**（`CopyFromScreen` 只取对话框矩形），
+需要人眼确认——已列为未验证。
+
+### 顺带
+
+`tools/capture-propsheet.ps1` 的执行顺序改为"先滚动、再点击/悬停"，并给滚轮补 `SetForegroundWindow`
+（否则滚轮发给当时的前台窗口，页面不动）；新增 `-HoverSweep N` 复现"快速扫动"。
+
+### 未验证
+
+1. 120 Hz / 高刷屏上的主观观感（只能人眼看）。
+2. tooltip 气泡的可见性（API 成功，截图抓不到 popup）。
+3. 滚动时的整窗重绘仍走双缓冲全量画；大内容（几百行）没有做"只画可见行"的裁剪优化，当前数据集最多几十行，够用。

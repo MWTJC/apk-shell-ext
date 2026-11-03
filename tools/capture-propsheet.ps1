@@ -13,6 +13,8 @@ param(
     [int]$WheelClicks = 0,
     # Skip the UI Automation attempt (it can hang when the shell is busy).
     [switch]$SkipUia,
+    # Move the cursor down the page in N steps before capture (reproduce fast hovering).
+    [int]$HoverSweep = 0,
     [switch]$KeepOpen
 )
 # Opens the "Properties" dialog for an APK via the shell verb, waits, then captures
@@ -168,7 +170,22 @@ for ($i = 0; (-not $selected) -and ($i -lt $CtrlTabPresses); $i++) {
     [Win32.PropWindowApi]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)      # Ctrl up
     Start-Sleep -Milliseconds 350
 }
-if (-not [string]::IsNullOrEmpty($ClickPoint)) {
+if ($WheelClicks -gt 0) {
+    $windowRect2 = New-Object Win32.PropWindowApi+RECT
+    [void][Win32.PropWindowApi]::GetWindowRect($dialog, [ref]$windowRect2)
+    $centerX = $windowRect2.Left + [int](($windowRect2.Right - $windowRect2.Left) / 2)
+    $centerY = $windowRect2.Top + [int](($windowRect2.Bottom - $windowRect2.Top) / 2)
+    [void][Win32.PropWindowApi]::SetForegroundWindow($dialog)
+    Start-Sleep -Milliseconds 200
+    [void][Win32.PropWindowApi]::SetCursorPos($centerX, $centerY)
+    Start-Sleep -Milliseconds 100
+    for ($i = 0; $i -lt $WheelClicks; $i++) {
+        [Win32.PropWindowApi]::mouse_event(0x0800, 0, 0, [uint32]4294967176, [UIntPtr]::Zero)  # WHEEL -120
+        Start-Sleep -Milliseconds 120
+    }
+    Write-Host ("scrolled {0} notches" -f $WheelClicks)
+    Start-Sleep -Milliseconds 300
+}if (-not [string]::IsNullOrEmpty($ClickPoint)) {
     $parts = $ClickPoint.Split(',')
     $windowRect = New-Object Win32.PropWindowApi+RECT
     [void][Win32.PropWindowApi]::GetWindowRect($dialog, [ref]$windowRect)
@@ -184,19 +201,22 @@ if (-not [string]::IsNullOrEmpty($ClickPoint)) {
     Start-Sleep -Milliseconds 400
 }
 
-if ($WheelClicks -gt 0) {
-    $windowRect2 = New-Object Win32.PropWindowApi+RECT
-    [void][Win32.PropWindowApi]::GetWindowRect($dialog, [ref]$windowRect2)
-    $centerX = $windowRect2.Left + [int](($windowRect2.Right - $windowRect2.Left) / 2)
-    $centerY = $windowRect2.Top + [int](($windowRect2.Bottom - $windowRect2.Top) / 2)
-    [void][Win32.PropWindowApi]::SetCursorPos($centerX, $centerY)
-    for ($i = 0; $i -lt $WheelClicks; $i++) {
-        [Win32.PropWindowApi]::mouse_event(0x0800, 0, 0, [uint32]4294967176, [UIntPtr]::Zero)  # WHEEL -120
-        Start-Sleep -Milliseconds 120
+if ($HoverSweep -gt 0) {
+    $windowRect3 = New-Object Win32.PropWindowApi+RECT
+    [void][Win32.PropWindowApi]::GetWindowRect($dialog, [ref]$windowRect3)
+    $left = $windowRect3.Left + 40
+    $top = $windowRect3.Top + 120
+    $bottom = $windowRect3.Bottom - 90
+    [void][Win32.PropWindowApi]::SetForegroundWindow($dialog)
+    for ($i = 0; $i -lt $HoverSweep; $i++) {
+        $y = $top + [int](($bottom - $top) * ($i % 20) / 20)
+        [void][Win32.PropWindowApi]::SetCursorPos($left, $y)
+        Start-Sleep -Milliseconds 12
     }
-    Write-Host ("scrolled {0} notches" -f $WheelClicks)
-    Start-Sleep -Milliseconds 300
+    Write-Host ("hover sweep: {0} steps" -f $HoverSweep)
 }
+
+
 
 Start-Sleep -Milliseconds $WaitMs
 

@@ -59,6 +59,10 @@ class PageView {
   int ItemCount() const { return static_cast<int>(refs_.size()); }
   int ItemTop(int index) const;
   int ItemHeight(int index) const;
+  // 某个 item 在"客户区坐标"里的矩形（已减滚动）；用于只重画变化的那几行
+  bool ItemClientRect(int index, int scroll_y, RECT* out) const;
+  // 上一帧这一行是否被省略号截断（tooltip 只在真的看不全时才出，不再靠字符数猜）
+  bool ItemTruncated(int index) const;
 
   // 底栏按钮：0 = 计算 SHA-256，1 = 复制全部为 JSON，2 = 重试
   static constexpr int kButtonHash = 0;
@@ -85,6 +89,7 @@ class PageView {
   std::vector<RECT> buttons_;
   std::vector<std::wstring> button_labels_;
   std::vector<int> button_ids_;
+  mutable std::vector<uint8_t> truncated_;  // Paint 时填：文字宽 > 可用宽
   ViewMetrics metrics_;
 };
 

@@ -74,6 +74,7 @@ void PageView::Layout(HWND hwnd, HDC dc, const PageModel& model, const PageTheme
 
   refs_.clear();
   rects_.clear();
+  truncated_.clear();
   buttons_.clear();
   button_labels_.clear();
   button_ids_.clear();
@@ -103,6 +104,7 @@ void PageView::Layout(HWND hwnd, HDC dc, const PageModel& model, const PageTheme
     y += metrics_.row_height;
   }
   metrics_.content_height = y;
+  truncated_.assign(refs_.size(), 0);
 
   metrics_.header = RECT{0, 0, width, metrics_.header_height};
   metrics_.footer = RECT{0, height - metrics_.footer_height, width, height};
@@ -141,6 +143,25 @@ void PageView::Layout(HWND hwnd, HDC dc, const PageModel& model, const PageTheme
 int PageView::ItemTop(int index) const {
   if (index < 0 || static_cast<size_t>(index) >= rects_.size()) return 0;
   return rects_[static_cast<size_t>(index)].top;
+}
+
+bool PageView::ItemTruncated(int index) const {
+  if (index < 0 || static_cast<size_t>(index) >= truncated_.size()) return false;
+  return truncated_[static_cast<size_t>(index)] != 0;
+}
+
+bool PageView::ItemClientRect(int index, int scroll_y, RECT* out) const {
+  if (out == nullptr) return false;
+  if (index < 0 || static_cast<size_t>(index) >= rects_.size()) return false;
+  const Rect& layout = rects_[static_cast<size_t>(index)];
+  const int top = metrics_.body.top + layout.top - scroll_y;
+  RECT rc{metrics_.body.left, top, metrics_.body.right, top + layout.height};
+  // 完全在可视区外就不需要重画
+  if (rc.bottom <= metrics_.body.top || rc.top >= metrics_.body.bottom) return false;
+  if (rc.top < metrics_.body.top) rc.top = metrics_.body.top;
+  if (rc.bottom > metrics_.body.bottom) rc.bottom = metrics_.body.bottom;
+  *out = rc;
+  return true;
 }
 
 int PageView::ItemHeight(int index) const {
@@ -273,6 +294,11 @@ void PageView::Paint(HDC dc, HWND hwnd, const PageModel& model, const PageTheme&
           RECT value_rc{value_left, row_rc.top, row_rc.right - metrics_.padding, row_rc.bottom};
           ::SetTextColor(dc, row.action ? (is_selected ? theme.selected_text : theme.accent)
                                         : value_color);
+          if (!row.value.empty() && i < truncated_.size()) {
+            const int available = value_rc.right - value_rc.left;
+            truncated_[i] = static_cast<uint8_t>(
+                MeasureText(dc, row.value) > available - theme.Scale(6) ? 1 : 0);
+          }
           DrawTextEllipsis(dc, row.value, value_rc, DT_LEFT);
           if (row.action && is_hot) {
             // 动作行画一条下划线，表明可点
@@ -295,6 +321,11 @@ void PageView::Paint(HDC dc, HWND hwnd, const PageModel& model, const PageTheme&
             ::SetTextColor(dc, theme.muted);
             RECT text_rc = row_rc;
             text_rc.left += metrics_.padding + metrics_.indent + theme.Scale(14);
+            if (i < truncated_.size()) {
+              const int available = text_rc.right - text_rc.left;
+              truncated_[i] = static_cast<uint8_t>(
+                  MeasureText(dc, row.children[ref.child]) > available - theme.Scale(6) ? 1 : 0);
+            }
             DrawTextEllipsis(dc, row.children[ref.child], text_rc, DT_LEFT);
             ::SelectObject(dc, old);
           }

@@ -100,6 +100,7 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 
 `apkprop.dll`：右键属性里的「安装包信息」单页，全自绘但**只决定排版**（4 组字段 + 展开 + 滚动 + 逐行复制）；
 底色/文字/字体全部向属性窗口本身与系统色要，所以页内永远和窗口同风格（系统深色时也是浅色）。
+重绘走双缓冲 + 脏矩形（hover 只重画 1–2 行），快速划过不闪；tooltip 悬停停留后才出，且只在该行真被截断时出。
 `AddPages` 零 IO，`PSM_INITDIALOG` 之后起线程 → `apkinfo.exe`（挂在带 `KILL_ON_JOB_CLOSE` 的 Job 上）→
 JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJobObject`。
 实测：7.9 MB 包 **140–188 ms** 出全页，1.79 GB 包 **157 ms**，按需 SHA-256 172 ms（1.9 GB 约 1.2 s），

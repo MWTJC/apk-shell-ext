@@ -295,3 +295,12 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 3. 100 次开关的句柄趋势未做（10 次已做，见 R-0006）；`worker 崩溃` 用标志文件钩子验证通过
    （`%TEMP%pk-shell-ext.test-abort.on` → `ExitProcess(0xC0000005)`）。
 4. 中英文双语只做了中文文案；`.rc` 的 STRINGTABLE 留了 ID，英文在 M5 一起做。
+
+## 15. 重绘策略（2026-11-04 快速划过闪烁后补）
+
+- **双缓冲**：`WM_PAINT` 画到缓存的兼容位图，最后一次 `BitBlt`；位图尺寸变化时才重建。
+- **脏矩形**：hover / 选中变化只重画受影响的 1–2 行（`PageView::ItemClientRect`），
+  整窗重画只发生在滚动、尺寸变化、模型更新这类低频事件上。
+- **tooltip**：悬停停留 600 ms 才出现，且只在"该行确实被省略号截断"时出现
+  （`PageView::ItemTruncated`，绘制时量文字宽度），不再按字符数猜；`WM_MOUSELEAVE` 立即隐藏。
+- 实测数字见 [verification.md R-0008](verification.md)：单次 hover 重绘从整窗 229k px 降到两行 22k px。

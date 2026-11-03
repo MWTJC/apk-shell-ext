@@ -42,6 +42,9 @@ namespace {
 constexpr UINT kMsgInfoDone = WM_APP + 1;
 constexpr UINT kMsgHashDone = WM_APP + 2;
 
+constexpr UINT_PTR kTooltipTimerId = 1;
+constexpr UINT kTooltipDwellMs = 600;      // 悬停多久才出 tooltip（原生行为）
+
 constexpr int kMenuCopyValue = 1001;
 constexpr int kMenuCopyPair = 1002;
 constexpr int kMenuCopyJson = 1003;
@@ -146,6 +149,17 @@ struct PageState : std::enable_shared_from_this<PageState> {
   int scroll_y = 0;
   int hot = -1;
   int selected = -1;
+  bool tracking_mouse = false;
+  bool hand_cursor = false;
+  int last_mouse_x = 0;
+  int last_mouse_y = 0;
+  bool tooltip_visible = false;
+
+  // 双缓冲：只在尺寸变化时重建（快速划过时每秒几十次重绘也不会闪）
+  HDC buffer_dc = nullptr;
+  HBITMAP buffer_bitmap = nullptr;
+  int buffer_width = 0;
+  int buffer_height = 0;
   std::wstring footer = L"正在解析…";
   std::string raw_json;
   ULONGLONG started_ms = 0;
@@ -499,32 +513,94 @@ void OnKeyDown(HWND hwnd, PageState* state, int vk) {
   }
 }
 
-void UpdateTooltip(HWND hwnd, PageState* state, int x, int y) {
-  if (state->tooltip == nullptr) return;
-  const int index = state->view.HitIndex(x, y, state->scroll_y);
-  std::wstring text;
-  if (index >= 0) {
-    const apksx::HitResult ref = state->view.RefAt(index);
-    text = state->view.ItemText(ref, state->model);
-    // 只有"长到可能被省略号截断"的才提示，否则满屏 tooltip 很吵
-    if (text.size() < 44) text.clear();
-  }
+void HideTooltip(PageState* state) {
+  if (state->tooltip == nullptr || !state->tooltip_visible) return;
+  TOOLINFOW info{};
+  info.cbSize = sizeof(info);
+  info.hwnd = state->hwnd;
+  info.uId = 1;
+  ::SendMessageW(state->tooltip, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&info));
+  state->tooltip_visible = false;
+}
+
+void PositionTooltip(PageState* state, int x, int y) {
+  if (state->tooltip == nullptr || !state->tooltip_visible) return;
+  POINT pt{x, y};
+  ::ClientToScreen(state->hwnd, &pt);
+  pt.x += 16;
+  pt.y += 20;
+  ::SendMessageW(state->tooltip, TTM_TRACKPOSITION, 0, MAKELPARAM(pt.x, pt.y));
+}
+
+// 只有"悬停停留够久 + 内容可能被省略号截断"才显示
+void ShowTooltip(HWND hwnd, PageState* state) {
+  if (state->tooltip == nullptr || state->hot < 0) return;
+  // 只在"上一帧确实被省略号截断"时才出 tooltip（原生行为），不再按字符数猜
+  if (!state->view.ItemTruncated(state->hot)) return;
+  const apksx::HitResult ref = state->view.RefAt(state->hot);
+  std::wstring text = state->view.ItemText(ref, state->model);
+  if (text.empty()) return;
   TOOLINFOW info{};
   info.cbSize = sizeof(info);
   info.hwnd = hwnd;
   info.uId = 1;
   info.lpszText = text.data();
   ::SendMessageW(state->tooltip, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&info));
-  if (text.empty()) {
-    ::SendMessageW(state->tooltip, TTM_TRACKACTIVATE, FALSE, reinterpret_cast<LPARAM>(&info));
-    return;
-  }
-  POINT pt{x, y};
+  POINT pt{state->last_mouse_x, state->last_mouse_y};
   ::ClientToScreen(hwnd, &pt);
   pt.x += 16;
   pt.y += 20;
   ::SendMessageW(state->tooltip, TTM_TRACKPOSITION, 0, MAKELPARAM(pt.x, pt.y));
   ::SendMessageW(state->tooltip, TTM_TRACKACTIVATE, TRUE, reinterpret_cast<LPARAM>(&info));
+  state->tooltip_visible = true;
+}
+
+// 只重画某个 item（hover/选中变化时用；比整窗重画便宜两个数量级）
+void InvalidateItem(HWND hwnd, PageState* state, int index) {
+  RECT rc{};
+  if (state->view.ItemClientRect(index, state->scroll_y, &rc)) {
+    ::InvalidateRect(hwnd, &rc, FALSE);
+  }
+}
+
+void EnsureBuffer(PageState* state, HDC reference, int width, int height) {
+  if (width <= 0 || height <= 0) return;
+  if (state->buffer_dc != nullptr && state->buffer_width == width &&
+      state->buffer_height == height) {
+    return;
+  }
+  if (state->buffer_dc != nullptr) {
+    ::DeleteDC(state->buffer_dc);
+    state->buffer_dc = nullptr;
+  }
+  if (state->buffer_bitmap != nullptr) {
+    ::DeleteObject(state->buffer_bitmap);
+    state->buffer_bitmap = nullptr;
+  }
+  state->buffer_dc = ::CreateCompatibleDC(reference);
+  if (state->buffer_dc == nullptr) return;
+  state->buffer_bitmap = ::CreateCompatibleBitmap(reference, width, height);
+  if (state->buffer_bitmap == nullptr) {
+    ::DeleteDC(state->buffer_dc);
+    state->buffer_dc = nullptr;
+    return;
+  }
+  ::SelectObject(state->buffer_dc, state->buffer_bitmap);
+  state->buffer_width = width;
+  state->buffer_height = height;
+}
+
+void ReleaseBuffer(PageState* state) {
+  if (state->buffer_dc != nullptr) {
+    ::DeleteDC(state->buffer_dc);
+    state->buffer_dc = nullptr;
+  }
+  if (state->buffer_bitmap != nullptr) {
+    ::DeleteObject(state->buffer_bitmap);
+    state->buffer_bitmap = nullptr;
+  }
+  state->buffer_width = 0;
+  state->buffer_height = 0;
 }
 
 void CreateTooltip(HWND hwnd, PageState* state) {
@@ -748,11 +824,26 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
 
     case WM_PAINT: {
       if (state == nullptr) break;
+      // 必须在 BeginPaint 之前取：BeginPaint 会把更新区域"验证"掉
+      RECT update{};
+      if (::GetUpdateRect(hwnd, &update, FALSE)) {
+        apksx::DebugLogf(L"propsheet: paint invalid=%ldx%ld",
+                         static_cast<long>(update.right - update.left),
+                         static_cast<long>(update.bottom - update.top));
+      }
       PAINTSTRUCT ps{};
       HDC dc = ::BeginPaint(hwnd, &ps);
       if (dc != nullptr) {
-        state->view.Paint(dc, hwnd, state->model, state->theme, state->scroll_y, state->hot,
+        RECT client{};
+        ::GetClientRect(hwnd, &client);
+        const int width = client.right - client.left;
+        const int height = client.bottom - client.top;
+        // 双缓冲：直接画到窗口 DC 时，整窗重画能看到"先底、再行、再底栏"的中间态（快滑时闪）
+        EnsureBuffer(state, dc, width, height);
+        HDC target = state->buffer_dc != nullptr ? state->buffer_dc : dc;
+        state->view.Paint(target, hwnd, state->model, state->theme, state->scroll_y, state->hot,
                           state->selected, state->footer, NeedHashButton(state), state->icon);
+        if (target != dc) ::BitBlt(dc, 0, 0, width, height, target, 0, 0, SRCCOPY);
       }
       ::EndPaint(hwnd, &ps);
       return 0;
@@ -799,12 +890,30 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
       if (state == nullptr) break;
       const int x = GET_X_LPARAM(lparam);
       const int y = GET_Y_LPARAM(lparam);
+      state->last_mouse_x = x;
+      state->last_mouse_y = y;
+      if (!state->tracking_mouse) {
+        TRACKMOUSEEVENT track{};
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE;
+        track.hwndTrack = hwnd;
+        ::TrackMouseEvent(&track);
+        state->tracking_mouse = true;
+      }
+
       const int index = state->view.HitIndex(x, y, state->scroll_y);
       if (index != state->hot) {
+        // 脏矩形：只重画旧行与新行，整窗重画留给滚动/尺寸变化
+        InvalidateItem(hwnd, state, state->hot);
         state->hot = index;
-        ::InvalidateRect(hwnd, nullptr, FALSE);
+        InvalidateItem(hwnd, state, index);
+        ::KillTimer(hwnd, kTooltipTimerId);
+        HideTooltip(state);
+        if (index >= 0) ::SetTimer(hwnd, kTooltipTimerId, kTooltipDwellMs, nullptr);
+      } else {
+        PositionTooltip(state, x, y);
       }
-      UpdateTooltip(hwnd, state, x, y);
+
       const apksx::HitResult ref = index < 0 ? apksx::HitResult{} : state->view.RefAt(index);
       bool hand = ref.kind == apksx::HitKind::Button;
       if (ref.kind == apksx::HitKind::Row && ref.group < state->model.groups.size() &&
@@ -812,7 +921,29 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
         const apksx::PageRow& row = state->model.groups[ref.group].rows[ref.row];
         hand = hand || row.action || row.expandable();
       }
-      ::SetCursor(::LoadCursorW(nullptr, hand ? IDC_HAND : IDC_ARROW));
+      if (hand != state->hand_cursor) {
+        state->hand_cursor = hand;
+        ::SetCursor(::LoadCursorW(nullptr, hand ? IDC_HAND : IDC_ARROW));
+      }
+      break;
+    }
+
+    case WM_MOUSELEAVE: {
+      if (state == nullptr) break;
+      state->tracking_mouse = false;
+      ::KillTimer(hwnd, kTooltipTimerId);
+      HideTooltip(state);
+      InvalidateItem(hwnd, state, state->hot);
+      state->hot = -1;
+      break;
+    }
+
+    case WM_TIMER: {
+      if (state == nullptr) break;
+      if (wparam == kTooltipTimerId) {
+        ::KillTimer(hwnd, kTooltipTimerId);
+        ShowTooltip(hwnd, state);
+      }
       break;
     }
 
@@ -877,6 +1008,8 @@ INT_PTR CALLBACK DlgProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
           shared_state->hwnd = nullptr;
         }
         shared_state->cancel.store(true);  // 线程 20 ms 内会看到；worker 在 Job 里被杀掉
+        ::KillTimer(hwnd, kTooltipTimerId);
+        ReleaseBuffer(shared_state);
         if (shared_state->tooltip != nullptr) {
           ::DestroyWindow(shared_state->tooltip);
           shared_state->tooltip = nullptr;
