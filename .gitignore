@@ -1,0 +1,26 @@
+# build output
+out/
+build/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+
+# msbuild / vs
+.vs/
+*.user
+*.suo
+CMakeUserPresets.json
+
+# tooling cache
+.cache/
+%LOCALAPPDATA%/apk-shell-ext/
+
+# generated fixtures (regenerate from scripts)
+tests/fixtures/generated/
+
+# local notes
+*.local.md

@@ -1,0 +1,188 @@
+# 实现阶段（M0–M5）
+
+> 阶段划分原则：**每个阶段都能单独结束并留下可复现的数字**。没有"做到一半"的里程碑——
+> 每阶段都写明"交付物 / 验收（可测）/ 退出条件"，未达标不进下一阶段。
+> 估时按"一个人、有完整工具链、不含意外"估算，随实测修正。
+
+## 0. 总览
+
+```mermaid
+flowchart LR
+    M0["M0 文档与基线<br/>(当前)"] --> M1["M1 缩略图闭环<br/>仅 .apk"]
+    M1 --> M2["M2 解析核心 + worker<br/>JSON v1"]
+    M2 --> M3["M3 属性页<br/>异步填充"]
+    M3 --> M4["M4 全格式<br/>APKS/AAB/IPA/HAP/APPX"]
+    M4 --> M5["M5 交付打磨<br/>安装器/签名/回归"]
+```
+
+| 阶段 | 主题 | 产出 | 估时 | 状态 |
+| --- | --- | --- | --- | --- |
+| M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
+| M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ⬜ 待开工 |
+| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | ⬜ |
+| M3 | 属性页 | `apkprop.dll`（异步、错误态、复制） | 2–3 d | ⬜ |
+| M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
+| M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
+
+**M0 评审记录（2026-11-03）**——三项决策已确认，后续实现不得再讨论：
+
+1. **小图标/列表视图放弃包内图标**，改用按格式区分的静态 ico（`DefaultIcon`，零调用）。见 [design.md §2.1](design.md)、[architecture.md §2.4](architecture.md)。
+2. **技术栈维持 C++ / 静态 CRT / 无托管运行时**（性能优先）。见 [ADR-0004](adr/0004-stack-and-dependency-boundary.md)。
+3. **M1 接受技术债 TD-001**：先整读 `resources.arsc`（≤ 8 MB），M2 改分段流式并删除该路径。见 §5。
+
+**总计约 17–24 人日**，其中真正的硬骨头是 M4b（AAB 的 protobuf）与 M4c/d（Assets.car、鸿蒙 resources.index）。
+
+## M0 · 文档与基线（已完成）
+
+**交付**
+
+- `README.md`、`docs/design.md`、`docs/architecture.md`、`docs/formats.md`、`docs/roadmap.md`、`docs/verification.md`
+- ADR-0001 ~ 0004（缩略图接口、禁止项、worker、技术栈）
+
+**验收**
+
+- 三条用户可见行为（B1/B2/B3）都有对应判据与测量方法；
+- 注册表契约、JSON schema v1 草案、格式矩阵可直接照着实现；
+- 禁止项清单明确（不注册 `IPropertyStore`、不在 `AddPages` 同步 IO 等）。
+
+**退出条件**：文档评审通过（**已于 2026-11-03 通过**，三项决策确认见上方"评审记录"）；任何后续"想加列 / 想加悬停提示"的改动都必须先改 ADR。
+
+## M1 · APK 缩略图最小闭环
+
+**范围**：只支持 `.apk`，只出缩略图，不做属性页、不做元数据。
+
+**交付**
+
+1. CMake 工程（MSVC v143，x64，`/MT`，`/W4 /WX`）。
+2. `apkthumb.dll`：`IThumbnailProvider` + `IInitializeWithItem`；EOCD/中央目录解析；最小 AXML（只到 `application@android:icon`）；最小 ARSC（字符串池 + 目标资源 ID 的 density 变体）；WIC 解码 PNG/WebP。
+3. 自建缓存 + 负缓存 + 300 ms 软超时。
+4. `tools\register.ps1 -Install|-Uninstall`（管理员），只写 `.apk`。
+5. `tests\fixtures\` 里 3 个自造最小 APK（无图标 / PNG 图标 / WebP 图标）+ 1 个真实包。
+
+**验收（必须逐条贴数字）**
+
+| 项 | 判据 | 方法 |
+| --- | --- | --- |
+| V1 零开销 | 详细信息视图滚动 30 s，`CreateFile *.apk` = **0** | ProcMon 过滤（见 verification.md） |
+| V2 冷缩略图 | 100 个 APK，P50 ≤ 120 ms，P95 ≤ 300 ms | 脚本遍历 + ETW/日志 |
+| V3 热缩略图 | 同目录二次进入 ≤ 20 ms/个 | 同上（缓存命中） |
+| V4 内存 | explorer 私有提交增量 ≤ 3 MB | VMMap / 任务管理器 |
+| V5 健壮性 | 截断包/空文件/非 ZIP 改名 `.apk` 不崩 explorer | 手工样本 |
+| V6 可卸载 | 卸载后注册表与安装前 diff = 0 | reg export 前后对比 |
+
+**退出条件**：V1–V6 全绿，且"图标是否像应用"由你人工确认 3 个真实包。
+
+**风险 / 已批准的技术债**：ARSC 分段读的实现复杂度高于预期 → M1 先"整读 `resources.arsc`（≤ 8 MB；超限回落文件名启发式）"，登记为 **TD-001**（见 §5），M2 必须关闭。该债已于 2026-11-03 获批准。
+
+## M2 · 解析核心 + worker
+
+**范围**：把"全量元数据"从 DLL 里彻底搬出去，做成可独立测试的 CLI。
+
+**交付**
+
+1. `src/core`：ZIP64、AXML 完整解析、ARSC 完整（含 adaptive icon 合成所需引用）、签名块（v1/v2/v3 方案识别 + 证书摘要）、ABI/密度/locale/权限/组件计数。
+2. `apkinfo.exe --json --schema=1`，输出符合 [architecture.md](architecture.md) §2.3 的 schema（冻结 v1）。
+3. 测试：`tests/` 用 Go 测试或 Python 脚本跑 fixtures，断言关键字段；对真实包与 `aapt2 dump badging` / `apkanalyzer` 对照，差异单独列表。
+4. 安全限额落地（[formats.md](formats.md) §8），用 3 个构造样本（条目炸弹 / 超大 arsc / 路径穿越）验证拒绝行为。
+
+**验收**
+
+- 10 个真实 APK：包名/版本/SDK/ABI/权限条目与 `aapt2` 一致（允许"我们多显示/顺序不同"）；
+- 恶意样本：拒绝且退出码 = 2，不产生临时文件；
+- 单包解析 P95 ≤ 300 ms（≤ 50 MB 包）、≤ 1.5 s（≤ 500 MB 包）；
+- `--hash=sha256` 与 `certutil` 结果一致。
+
+**退出条件**：schema v1 冻结（之后只增字段）；worker 可被属性页与脚本两类调用方稳定消费；**TD-001 关闭**——ARSC 改为分段流式读取，"整读 ≤ 8 MB"路径删除，且大资源表样本（≥ 32 MB）的缩略图仍满足 V2 判据。
+
+## M3 · 属性页
+
+**范围**：`apkprop.dll`，只做「安装包信息」单页。
+
+**交付**
+
+1. `IShellPropSheetExt` + `IPersistFile`；`AddPages` ≤ 50 ms。
+2. 页面布局：顶部（图标 48×48、应用名、包名、版本）+ 4 个分组（应用 / 技术 / 权限与组件 / 文件与签名）。
+3. 异步：`PostMessage` 起 worker → 管道读取 → `WM_APP+1` 回填；解析中显示骨架与"正在解析…"。
+4. 错误态：非安装包 / 损坏 / 超时 / worker 崩溃，各有明确文案 + "复制诊断"。
+5. 可复制字段；"复制全部为 JSON"。
+6. 深色模式 + 高 DPI（`WM_DPICHANGED`）。
+
+**验收**
+
+- 冷开 P95 ≤ 1 s（500 MB 包 ≤ 3 s），热开（缓存）≤ 200 ms；
+- 解析进行中直接关窗 × 20 次：不崩、不残留进程、句柄数回到基线；
+- 连续开关 100 次：explorer 句柄/私有提交无单调增长；
+- 高 DPI 150%/200% 下不裁切；深色模式下文字对比度正常；
+- **worker 人为 abort**：页面显示"解析器异常退出"，explorer 存活。
+
+**退出条件**：属性页在 3 个真实包 + 2 个损坏包上表现符合预期；冻结页面字段顺序（之后只加不删）。
+
+## M4 · 全格式
+
+按"复用成本从低到高"排序，每个子阶段独立验收：
+
+| 子阶段 | 内容 | 估时 | 关键验收 |
+| --- | --- | --- | --- |
+| M4a | `.apks/.xapk/.apkm`（外层 ZIP + base.apk；`icon.png` 兜底） | 1 d | 3 个真实包图标正确；split 列表在属性页可见 |
+| M4b | `.aab`（`BundleConfig.pb`、**protobuf manifest**、`resources.pb`） | 2–3 d | 3 个 AAB：包名/版本/模块列表正确；图标与 bundletool 生成的一致 |
+| M4c | `.ipa`（binary plist；AppIcon 约定名 → iTunesArtwork → `Assets.car` 回退） | 2 d | 3 个 IPA：bundleId/版本正确；≥ 2 个能出高清图标（car 失败要能回退） |
+| M4d | `.hap`（`module.json`；`$media:` → `resources.index` 启发式 → 索引解析） | 2–3 d | 3 个 HAP：bundleName/versionName 正确；≥ 2 个出图标 |
+| M4e | `.appx/.msix`（`AppxManifest.xml` + 限定符选图） | 0.5 d | 2 个包正确 |
+
+**验收（跨格式）**
+
+- 一个混合目录（每种格式 ≥ 5 个）滚大图标视图：不崩、无卡顿尖峰（ETW 里单次 `GetThumbnail` ≤ 300 ms）；
+- 每种格式的属性页字段与对应官方工具（bundletool / aapt2 / plutil / hvigor）抽查一致；
+- 格式识别不依赖扩展名（嗅探容器），扩展名只用于注册表路由。
+
+**退出条件**：六类格式的"图标 + 属性页"都能工作，负缓存与错误文案覆盖到新格式。
+
+## M5 · 交付打磨
+
+**交付**
+
+1. 安装器（一次 UAC 完成注册；卸载精确回滚）与便携版（`register.ps1`）。
+2. VERSIONINFO、**格式差异化 ico（每扩展名一枚，16/24/32/48/256 五档）与 `DefaultIcon` 注册**、可选代码签名（OV/EV 待定，见 design.md §8）。
+3. 诊断开关（`%TEMP%\apk-shell-ext.debug.on` 时写日志，参照果核的做法）。
+4. 中英文资源；深色/高 DPI 全面回归。
+5. 缓存清理工具（`tools\clearcache.ps1` 或 `apkinfo.exe --clear-cache`）。
+6. 评估 `IExtractIcon`（小图标视图）与 MSIX：只做结论，不默认实现（需改 ADR-0001）。
+7. 更新全部文档与验收记录。
+
+**验收**
+
+- 真装真卸（一次 UAC）：装后 3 个格式生效；卸后注册表/文件零残留；
+- ProcMon 回归 V1（仍是 0 次打开）；
+- 小图标 / 列表视图各格式图标可区分，且 V1 复跑仍为 0 次 `CreateFile`（V9）；
+- Defender 全盘扫描无误报；SmartScreen 未签名时提示可接受（记录截图）；
+- 卸载重装后缩略图仍正常（缓存键含版本号）。
+
+**退出条件**：可交付给自己日常使用，且文档与实现一致（"文档说的 = 代码做的"）。
+
+## 5. 技术债登记
+
+> 技术债必须有编号、关闭条件与关闭阶段；未关闭的债不得进入下一里程碑的"完成"定义。
+
+| 编号 | 内容 | 引入阶段 | 影响 | 关闭条件 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| TD-001 | 缩略图路径**整读** `resources.arsc`（上限 8 MB，超限回落"按文件名猜 mipmap"） | M1 | 大资源表的包首次出图变慢（仍受 300 ms 超时保护）；内存瞬时多占 ≤ 8 MB | M2 改分段流式读取并删除整读路径；≥ 32 MB 资源表样本仍满足 V2 | 已批准（2026-11-03），**未关闭** |
+
+## 6. 风险登记
+
+| # | 风险 | 影响 | 概率 | 应对 |
+| --- | --- | --- | --- | --- |
+| R1 | AAB 的 protobuf manifest 工作量超预期 | M4 延期 | 高 | 先只支持 `base` 模块；protobuf 用 lite 运行时或手写 decoder；必要时 M4b 单独发布 |
+| R2 | `Assets.car` 格式无公开文档 | IPA 图标退化 | 中 | 首选约定名/iTunesArtwork 回退；car 只做"最大尺寸 PNG 提取" |
+| R3 | 鸿蒙 `resources.index` 无稳定公开结构 | HAP 图标靠猜 | 中 | `$media:` 名 → `resources/base/media/<name>.png` 启发式先覆盖；索引版留 M4d-2 |
+| R4 | Win11 后续版本收紧 in-proc 扩展 | 全部失效 | 低 | 保持 Microsoft 官方接口、不注入、不 hook；关注 Shell 变更公告 |
+| R5 | 杀软把 shell 扩展判为可疑 | 用户装不上 | 中 | 签名、VERSIONINFO、不写自启/不联网；提供 SHA-256 与源码 |
+| R6 | ARSC 大包读取拖慢缩略图 | 违背 B1 | 中 | 允许 M1 技术债（整读 + 上限），M2 改分段；超限走"文件名启发式" |
+| R7 | explorer 内 DLL 崩溃 | 桌面崩 | 低 | 全接口 `try/catch`；解析在 worker；M1 起就做 20 次异常样本回归 |
+| R8 | 32 位宿主（Total Commander 等）需要 x86 版 | 覆盖不全 | 低 | M5 评估；x86 只是编译配置差异，但需单独测试 |
+
+## 7. 每阶段结束必做（DoD）
+
+1. 在 `docs/verification.md` 追加一条记录：命令、原始输出、结论、未验证项。
+2. 更新本文件顶部的状态表与 `README.md` 的阶段行。
+3. 有决策变更 → 新 ADR（编号递增，不修改旧 ADR 的结论，只追加修订段）。
+4. 代码与文档不一致时，以"能跑的证据"为准，改文档。
