@@ -224,51 +224,52 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   }
   if (!tech.rows.empty()) out->groups.push_back(std::move(tech));
 
-  // ---------------------------------------------------------------- 权限与组件
-  PageGroup perms;
-  perms.title = L"权限与组件";
+  // ---------------------------------------------------------------- 权限（可折叠）
   {
     const json::Value* list = doc.Find("permissions");
-    if (list != nullptr && list->type == json::Type::Array && !list->items.empty()) {
-      PageRow row;
-      row.key = L"权限";
-      std::vector<std::wstring> children;
+    std::vector<std::wstring> names;
+    if (list != nullptr && list->type == json::Type::Array) {
       for (const json::ValuePtr& item : list->items) {
         const std::wstring name = StrField(item.get(), "name");
-        if (!name.empty()) children.push_back(name);
+        if (!name.empty()) names.push_back(name);
       }
-      wchar_t buf[48];
-      _snwprintf_s(buf, _TRUNCATE, L"%zu 项", children.size());
-      row.value = buf;
-      row.copy_value = children.empty() ? std::wstring() : children.front();
-      row.children = std::move(children);
-      perms.rows.push_back(std::move(row));
+    }
+    if (!names.empty()) {
+      PageGroup perms;
+      wchar_t buf[64];
+      _snwprintf_s(buf, _TRUNCATE, L"权限 · %zu 项", names.size());
+      perms.title = buf;
+      perms.collapsible = true;  // 分组带带折叠箭头，收起后整段明细隐藏
+      for (const std::wstring& name : names) AddRow(&perms, L"", name);
+      out->groups.push_back(std::move(perms));
     }
   }
+
+  // ---------------------------------------------------------------- 特性（可折叠）
   {
     const json::Value* list = doc.Find("features");
-    if (list != nullptr && list->type == json::Type::Array && !list->items.empty()) {
-      PageRow row;
-      row.key = L"特性";
-      size_t required = 0;
-      std::vector<std::wstring> children;
+    std::vector<std::wstring> lines;
+    size_t required = 0;
+    if (list != nullptr && list->type == json::Type::Array) {
       for (const json::ValuePtr& item : list->items) {
         const std::wstring name = StrField(item.get(), "name");
         if (name.empty()) continue;
         const json::Value* required_field = Field(item.get(), "required");
         const bool is_required = required_field == nullptr || required_field->as_bool(true);
         if (is_required) ++required;
-        children.push_back(name + (is_required ? L"（必需）" : L"（可选）"));
+        lines.push_back(name + (is_required ? L"（必需）" : L"（可选）"));
       }
-      wchar_t buf[64];
-      _snwprintf_s(buf, _TRUNCATE, L"%zu 项（%zu 必需）", children.size(), required);
-      row.value = buf;
-      row.copy_value = children.empty() ? std::wstring() : children.front();
-      row.children = std::move(children);
-      perms.rows.push_back(std::move(row));
+    }
+    if (!lines.empty()) {
+      PageGroup features;
+      wchar_t buf[80];
+      _snwprintf_s(buf, _TRUNCATE, L"特性 · %zu 项（%zu 必需）", lines.size(), required);
+      features.title = buf;
+      features.collapsible = true;
+      for (const std::wstring& line : lines) AddRow(&features, L"", line);
+      out->groups.push_back(std::move(features));
     }
   }
-  if (!perms.rows.empty()) out->groups.push_back(std::move(perms));
 
   // ---------------------------------------------------------------- 文件与签名
   PageGroup files;

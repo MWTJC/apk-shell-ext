@@ -1,15 +1,18 @@
 #include "propsheet/page_list.h"
 
 #include <commctrl.h>
+#include <shlwapi.h>  // DLLVERSIONINFO / DllGetVersion
 
 #include <algorithm>
+#include <cstring>
 
 namespace apksx {
 namespace {
 
 int AddRow(HWND list, int group_id, int indent, const wchar_t* key, const wchar_t* value) {
   LVITEMW item{};
-  item.mask = LVIF_TEXT | LVIF_GROUPID | LVIF_INDENT;
+  item.mask = LVIF_TEXT | LVIF_INDENT;
+  if (group_id > 0) item.mask |= LVIF_GROUPID;
   item.iItem = ListView_GetItemCount(list);
   item.iIndent = indent;
   item.iGroupId = group_id;
@@ -27,10 +30,36 @@ int AddRow(HWND list, int group_id, int indent, const wchar_t* key, const wchar_
   return index;
 }
 
-void AddGroup(HWND list, int group_id, const std::wstring& title) {
+// comctl32 是 v5（进程没有 v6 清单）还是 v6：只有 v6 才有分组带。
+// 不用 LVM_ENABLEGROUPVIEW 的返回值判断——它在 v6 上也会返回 FALSE，会把列表搞成"分组模式但无组"（整表空白）。
+int ComctlMajorVersion() {
+  static int cached = -1;
+  if (cached >= 0) return cached;
+  cached = 0;
+  HMODULE module = ::GetModuleHandleW(L"comctl32.dll");
+  if (module == nullptr) module = ::LoadLibraryW(L"comctl32.dll");
+  if (module != nullptr) {
+    auto get_version = reinterpret_cast<HRESULT(WINAPI*)(DLLVERSIONINFO*)>(
+        ::GetProcAddress(module, "DllGetVersion"));
+    if (get_version != nullptr) {
+      DLLVERSIONINFO info{};
+      info.cbSize = sizeof(info);
+      if (SUCCEEDED(get_version(&info))) cached = static_cast<int>(info.dwMajorVersion);
+    }
+  }
+  return cached;
+}
+
+void AddGroup(HWND list, int group_id, const std::wstring& title, bool collapsible) {
   LVGROUP group{};
   group.cbSize = sizeof(group);
   group.mask = LVGF_HEADER | LVGF_GROUPID;
+  if (collapsible) {
+    // 默认展开；箭头由系统画、点击也由系统处理，我们不做命中测试
+    group.mask |= LVGF_STATE;
+    group.stateMask = LVGS_COLLAPSIBLE;
+    group.state = LVGS_COLLAPSIBLE;
+  }
   group.pszHeader = const_cast<wchar_t*>(title.c_str());
   group.cchHeader = static_cast<int>(title.size());
   group.iGroupId = group_id;
@@ -42,7 +71,7 @@ void AddGroup(HWND list, int group_id, const std::wstring& title) {
 void ConfigureListView(HWND list) {
   ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_INFOTIP |
                                              LVS_EX_LABELTIP | LVS_EX_DOUBLEBUFFER);
-  ListView_EnableGroupView(list, TRUE);
+  // 分组视图在 PopulateListView 里按 comctl32 版本决定开关
 }
 
 void ApplyListColumns(HWND list, int width, int dpi) {
@@ -63,11 +92,21 @@ void PopulateListView(HWND list, const PageModel& model) {
   ::SendMessageW(list, WM_SETREDRAW, FALSE, 0);
   ListView_DeleteAllItems(list);
   ListView_RemoveAllGroups(list);
-  ListView_EnableGroupView(list, TRUE);
+  // comctl32 v5 的宿主（没有 v6 清单的进程）不画分组带：此时把组标题降级成普通行，
+  // 否则"权限/特性"这种只有值的明细会失去上下文。
+  const bool groups_supported = ComctlMajorVersion() >= 6;
+  ListView_EnableGroupView(list, groups_supported ? TRUE : FALSE);
 
   int group_id = 1;
   for (const PageGroup& group : model.groups) {
-    AddGroup(list, group_id, group.title);
+    if (!groups_supported) {
+      AddRow(list, 0, 0, L"", group.title.c_str());
+      for (const PageRow& row : group.rows) {
+        AddRow(list, 0, 0, row.key.c_str(), row.value.c_str());
+      }
+      continue;
+    }
+    AddGroup(list, group_id, group.title, group.collapsible);
     for (const PageRow& row : group.rows) {
       // 子项缩进一级（系统画缩进），与"权限/特性"这类明细共存
       AddRow(list, group_id, 0, row.key.c_str(), row.value.c_str());
@@ -77,8 +116,8 @@ void PopulateListView(HWND list, const PageModel& model) {
     }
     ++group_id;
   }
-  if (!model.warnings.empty()) {
-    AddGroup(list, group_id, L"诊断");
+  if (groups_supported && !model.warnings.empty()) {
+    AddGroup(list, group_id, L"诊断", false);
     for (const std::wstring& warning : model.warnings) {
       AddRow(list, group_id, 0, L"", warning.c_str());
     }

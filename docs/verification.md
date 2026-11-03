@@ -769,3 +769,34 @@ out/x64/proptest.exe --list-json aida.json --capture docs/evidence/m3-native-gro
 
 - `proptest.exe` 直接 `PropertySheetW` 仍返回 `-1`（已确认 `WM_INITDIALOG` 从未被调用，`InitCommonControlsEx` 与 v6 清单都已加）。
   目前按"不走属性表"的 `--list-json` 模式做渲染验证；真实页面走 explorer 路径，不影响交付。
+
+## 18. R-0010 记录（M3 · 权限/特性可折叠，2026-11-04）
+
+用户要求把权限明细与特性明细做成可折叠。实现方式：两段各自成为**可折叠的系统分组**
+（`LVGS_COLLAPSIBLE`，箭头与点击都由系统负责），不新增自绘。
+
+### 验收
+
+```
+MSYS_NO_PATHCONV=1 cmd.exe /c "tools\build.cmd Release"        # 干净
+out/x64/propsheet_model_test.exe --selftest                      # 29 项全 ok（新增"权限/特性组可折叠"）
+python tests/verify_apkinfo.py tests/fixtures/generated/*.apk    # 6/6
+```
+
+| 证据 | 内容 |
+| --- | --- |
+| `docs/evidence/m3-native-groups.png` | v6 宿主：`权限 · 6 项`、`特性 · 4 项（0 必需）` 两条分组带都带折叠箭头 |
+| `docs/evidence/m3-native-page.png` | 真实页面（v5 宿主）：组标题降级为行，明细可读 |
+| `docs/evidence/m3-native-v5-fallback.png` | v5 降级形态：`应用 / 技术 / 权限 · 6 项 / 特性 · 4 项…` 作为行出现 |
+
+### 结构变化
+
+- 分组由 4 个变 5 个：`应用 / 技术 / 权限 / 特性 / 文件与签名`，`组件` 行留在「技术」组。
+- 明细行是"空键 + 值等于权限名"，复制时按值列取值（右键「复制值」仍然对）。
+- 折叠状态不持久化。
+
+### 踩到的坑
+
+`LVM_ENABLEGROUPVIEW` 返回值不可靠（v6 下也可能返回 FALSE）：第一次按返回值判断，
+列表进入"分组模式但条目无组"状态，整屏空白。改用 `comctl32.dll` 的 `DllGetVersion`
+判断主版本号是否 ≥ 6，并且 v5 时显式 `ListView_EnableGroupView(FALSE)`。

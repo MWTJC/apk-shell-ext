@@ -25,6 +25,8 @@ struct PageRow {
 struct PageGroup {
   std::wstring title;
   std::vector<PageRow> rows;
+  // 系统分组带可折叠（LVS：LVGS_COLLAPSIBLE）。用于"权限 / 特性"这类可能很长的明细
+  bool collapsible = false;
 };
 
 struct PageModel {

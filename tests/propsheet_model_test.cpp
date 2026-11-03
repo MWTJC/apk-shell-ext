@@ -89,6 +89,13 @@ void DumpModel(const apksx::PageModel& model) {
   }
 }
 
+const apksx::PageGroup* FindGroupByPrefix(const apksx::PageModel& model, const wchar_t* prefix) {
+  for (const apksx::PageGroup& group : model.groups) {
+    if (group.title.find(prefix) == 0) return &group;
+  }
+  return nullptr;
+}
+
 int RunSelfTest() {
   std::printf("selftest: parse + model\n");
   apksx::json::ValuePtr doc;
@@ -108,17 +115,23 @@ int RunSelfTest() {
   const std::wstring* package = FindValue(model, L"包名");
   Check(package != nullptr && *package == L"com.example.pngicon", "应用组有包名");
 
-  const apksx::PageRow* perms = FindRowAnywhere(model, L"权限");
-  Check(perms != nullptr && perms->children.size() == 2, "权限行有两个子项");
-  Check(perms != nullptr && perms->value == L"2 项", "权限行显示数量");
+  const apksx::PageGroup* perms = FindGroupByPrefix(model, L"权限 ·");
+  Check(perms != nullptr && perms->collapsible, "权限组可折叠");
+  Check(perms != nullptr && perms->rows.size() == 2, "权限组有两条明细");
+  Check(perms != nullptr && perms->title.find(L"2 项") != std::wstring::npos, "权限组标题带数量");
+  Check(perms != nullptr && perms->rows[0].value.find(L"android.permission") == 0,
+        "权限明细是权限名");
 
-  const apksx::PageRow* features = FindRowAnywhere(model, L"特性");
-  Check(features != nullptr && features->children.size() == 2, "特性行有两个子项");
-  Check(features != nullptr && features->value.find(L"1 必需") != std::wstring::npos,
-        "特性行统计 required");
-  Check(features != nullptr && features->children[0].find(L"（必需）") != std::wstring::npos,
+  const apksx::PageGroup* features = FindGroupByPrefix(model, L"特性 ·");
+  Check(features != nullptr && features->collapsible, "特性组可折叠");
+  Check(features != nullptr && features->rows.size() == 2, "特性组有两条明细");
+  Check(features != nullptr && features->title.find(L"1 必需") != std::wstring::npos,
+        "特性组标题统计 required");
+  Check(features != nullptr &&
+            features->rows[0].value.find(L"（必需）") != std::wstring::npos,
         "必需的特性带标注");
-  Check(features != nullptr && features->children[1].find(L"（可选）") != std::wstring::npos,
+  Check(features != nullptr &&
+            features->rows[1].value.find(L"（可选）") != std::wstring::npos,
         "可选的特性带标注");
 
   const apksx::PageRow* sha = FindRowAnywhere(model, L"SHA-256");
