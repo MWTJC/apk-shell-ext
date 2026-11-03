@@ -290,6 +290,7 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 ### 已知限制 / 未验证
 
 1. 无障碍：自绘列表对 Narrator 不友好（§13 P1 已登记，v1 接受）。
-2. 150% / 200% DPI、浅色主题未截图验证（当前机器是深色 100%）。
-3. 100 次开关的句柄/私有提交趋势、`worker 人为 abort`（需要新增测试钩子）未做。
+2. **150% / 200% DPI 未实测**（当前机器 100%）；浅色主题已截图为证。
+3. 100 次开关的句柄趋势未做（10 次已做，见 R-0006）；`worker 崩溃` 用标志文件钩子验证通过
+   （`%TEMP%pk-shell-ext.test-abort.on` → `ExitProcess(0xC0000005)`）。
 4. 中英文双语只做了中文文案；`.rc` 的 STRINGTABLE 留了 ID，英文在 M5 一起做。

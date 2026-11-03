@@ -567,7 +567,10 @@ out\x64\proptest.exe --file <apk> --verbose                          :: 不经�
 | 6 | 损坏包 | ✅ 页内"未找到 ZIP 结束记录（不是有效 ZIP）"+ 重试/复制 JSON，explorer 不崩（`m3-propsheet-error.png`） |
 | 7 | 解析中关窗（哈希 1.92 GB，3 次） | ✅ 关窗后 `Get-Process apkinfo` 计数 = 0（Job `KILL_ON_JOB_CLOSE` + `TerminateJobObject`） |
 | 8 | 行模型单测 | ✅ 26/26（`propsheet_model_test --selftest`，含坏 JSON/Unicode/签名缺失路径） |
-| 9 | 卸载零残留 | ⬜ 未在本轮跑（`-Uninstall` 的备份/回滚逻辑沿用 R-0002 的机制） |
+| 9 | 卸载零残留 | ✅ `-Uninstall` 后 `HKCU\Software\Classes\.apk`、两个 CLSID 全部消失；重装后页面正常 |
+| 10 | worker 崩溃 | ✅ 页内"解析器异常退出（0xC0000005）"+ 重试，explorer 存活（`m3-propsheet-crash.png`） |
+| 11 | 浅色主题 | ✅ 白底深字、分组条浅灰、按钮蓝色（`m3-propsheet-light-theme.png`） |
+| 12 | 10 次开关（关窗时 worker 在跑） | ✅ explorer 句柄 4464 → 4435（**-29**），`apkinfo` 残留 0（`tools/propsheet-stress.ps1`） |
 
 ### 关键发现
 
@@ -580,10 +583,19 @@ out\x64\proptest.exe --file <apk> --verbose                          :: 不经�
 注册表只需要 `HKCR\.apk\shellex\PropertySheetHandlers\ApkInfo` + `HKCR\CLSID\{…}\InprocServer32`；
 排查时临时加的 `HKCR\*`、`SystemFileAssociations\.apk`、`Approved` 条目均已撤销，移除后页面仍正常。
 
+### 崩溃钩子与一个真实教训
+
+验收"解析器崩溃"需要一个能让 worker 死掉的开关。环境变量传不进 explorer 拉起的子进程，所以用标志文件
+`%TEMP%pk-shell-ext.test-abort.on`：存在时 worker 等 300 ms 后 `ExitProcess(0xC0000005)`。
+
+第一版用的是 `RaiseException(0xC0000005)`，结果页面一直停在"正在解析…" —— 因为 WER 把进程挂住不退出，
+我们的读循环只能等到 10 s 兜底，最后报的是"超时"而不是"崩溃"。**能真崩的进程不一定立刻变成退出码**，
+测试钩子要模拟"退出码"而不是"异常分发"。
+
 ### 未验证（不许当作通过）
 
-1. 150% / 200% DPI 与浅色主题（当前机器只有深色 100%）。
-2. 连续开关 100 次的句柄/私有提交趋势（只做了 3 次中的取消路径）。
-3. `worker 人为 abort` 的 UI 文案（需要新增 `APKSX_TEST_ABORT_MS` 钩子）。
-4. 卸载后的注册表 diff = 0（V6 回归）。
-5. 无障碍（自绘列表对 Narrator 不友好，已登记为 P1）。
+1. **150% / 200% DPI**（当前机器 100%；DPI 相关的排版逻辑只做了 DIP 换算，没有实测）。
+2. 连续开关 **100 次**的句柄/私有提交趋势（本轮做的是 10 次，且是"关窗时 worker 还在跑"的路径）。
+3. 中英文双语（只做了中文文案）。
+4. 无障碍（自绘列表对 Narrator 不友好，已登记为 P1）。
+5. 多显示器 / 不同主题色（Accent color）下的观感。

@@ -397,6 +397,22 @@ int wmain(int argc, wchar_t** argv) {
     }
   }
 
+  // 测试钩子：属性页要验证"解析器崩溃"的文案（M3 验收）。环境变量管不到 explorer 拉起的子进程，
+  // 所以用标志文件：%TEMP%pk-shell-ext.test-abort.on 存在时，等 300 ms 后模拟访问违例。
+  {
+    wchar_t temp[MAX_PATH * 2] = {};
+    const DWORD n = ::GetTempPathW(ARRAYSIZE(temp), temp);
+    if (n > 0 && n < ARRAYSIZE(temp)) {
+      std::wstring flag = temp;
+      flag += L"apk-shell-ext.test-abort.on";
+      if (::GetFileAttributesW(flag.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        ::Sleep(300);
+        // 直接用异常退出码退出（RaiseException 会把进程交给 WER，页面只能看到"超时"）
+        ::ExitProcess(0xC0000005u);
+      }
+    }
+  }
+
   apksx::ApkInfo info;
   apksx::Error err;
   const bool ok = apksx::CollectApkInfo(opt.file, opt.hash, &info, &err);
