@@ -56,6 +56,10 @@ journal 用固定 `wchar_t buf[64]` 拼字符串被截断 → 卸载时键名对
 
 - `src/version.h` 是唯一来源（`1.0.0.0`），`apkthumb.rc` / `apkprop.rc` / `apkinfo.rc` /
   `apkinst.rc`(已删) 都从它取；四个二进制统一 `FILEVERSION 1.0.0.0`。
+- `CompanyName` 取 `APKSX_PUBLISHER`（`MWTJC`，2026-11-04 起；控制面板"已安装的应用"里的发布者也用它），
+  `ProductName` 仍是 `apk-shell-ext`。
+- 控制面板里的图标来自 `UninstallDisplayIcon={app}\icons\apk.ico`：**不能指向 `apkthumb.dll`**
+  （那里面没有 ICON 资源，`ExtractIconEx` 返回 0 个图标 → 列表里是空白；2026-11-04 实测并改掉）。
 - 每个资源里都有 **en-US + zh-CN 两个 StringFileInfo 块**，`FileDescription` 随系统语言变化：
   `APK / HAP package thumbnail provider` ↔ `安装包缩略图提供程序（APK / HAP）`。
 - `APKSX_PARSER_VERSION` 由 `m4a` 改为 `m5`：它参与缩略图缓存键，所以**装新版本后旧缓存自动失效**

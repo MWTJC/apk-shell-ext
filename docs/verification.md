@@ -1405,3 +1405,77 @@ log: 使用我们的文件关闭应用程序。 (forced)
 
 被强关的只有 explorer / dllhost 两个宿主进程（都不承载用户数据），安装后一切正常
 （`verify-install -State installed` ok、`--features` 5/5/5、`install.md` 已更新到新版）。
+
+## 25. R-0017 记录（控制面板条目：图标与发布者；worker 控制台窗口加固，2026-11-04）
+
+### 环境
+
+与 §0 一致。本机此时是**整机安装**（`C:\Program Files\apk-shell-ext`，用户点击安装器并选"为所有用户安装"），
+所以本轮所有注册表观察都在 `HKLM`。
+
+### 现象 1：控制面板里图标空缺
+
+```
+$ (Get-ItemProperty 'HKLM:\...\Uninstall\{…B03}_is1').DisplayIcon
+C:\Program Files\apk-shell-ext\apkthumb.dll
+$ ExtractIconExW('C:\Program Files\apk-shell-ext\apkthumb.dll', 0, ...)
+0        <- 这个 DLL 里没有 ICON 资源
+```
+
+**原因**：`UninstallDisplayIcon={app}\apkthumb.dll` 指向了一个不含图标资源的 DLL。
+**修法**：改成 `{app}\icons\apk.ico`（Inno 文档明确支持 `.ico`）。
+
+验证（用同一套 `[Setup]` 片段、独立 AppId 的探针安装器，不碰真实安装）：
+
+```
+$ probe-icon-setup.exe /VERYSILENT …
+DisplayIcon = C:\…\apk-shell-ext-probe\icons\apk.ico
+Publisher   = MWTJC
+icons in DisplayIcon = 1
+```
+
+### 现象 2：发布者显示 `apk-shell-ext`
+
+`#define AppPublisher "MWTJC"`（安装器的 `AppPublisher` / `VersionInfoCompany`），
+并新增 `APKSX_PUBLISHER`（`src/version.h`），三个 `.rc` 的 `CompanyName` 都改用它：
+
+```
+out\x64\apkinfo.exe: Company='MWTJC' Product='apk-shell-ext' Ver=1.0.0.0
+out\x64\apkprop.dll: Company='MWTJC' Product='apk-shell-ext' Ver=1.0.0.0
+out\x64\apkthumb.dll: Company='MWTJC' Product='apk-shell-ext' Ver=1.0.0.0
+```
+
+### 现象 3：右键属性时"闪一下命令行窗口"
+
+排查思路与实测（三轮，全部在本机）：
+
+1. **谁会被拉起**：属性页在 `WM_INITDIALOG` 里 `CreateProcessW` 拉起 `apkinfo.exe`（控制台子系统），
+   时机正好是"属性窗口出现前"。其它文件类型不会走到我们这一页，所以只有安装包会闪。
+2. **它有没有窗口**：用 `SetWinEventHook(EVENT_OBJECT_SHOW)` 在真实右键 → 属性（Alt+Enter）过程中
+   记录所有新出现的窗口（`flash-real2.ps1` + `audit-bg.ps1`）：
+
+   ```
+   23:45:28.535 CabinetWClass 文件资源管理器        explorer
+   …（Explorer 自己的 DirectUIHWND / CtrlNotifySink）
+   23:45:31.445 #32770 'aida64-1.94.apk 属性'      explorer
+   ```
+
+   **没有任何控制台类的窗口出现**（`ConsoleWindowClass` 计数 = 0）。
+3. **直接复现 CreateProcess**：用与 `worker_client.cpp` 完全相同的 `STARTUPINFO` + `CREATE_NO_WINDOW`
+   拉起 `apkinfo.exe --json <7.85 MB 包>`（活 150 ms 左右），窗口审计同样没有控制台窗口。
+
+结论：本机复现不出来（`CREATE_NO_WINDOW` 在这个 build 上是有效的）。仍然加了一道微软文档给的
+双保险并写进代码注释：
+
+```cpp
+si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+si.wShowWindow = SW_HIDE;      // 与 CREATE_NO_WINDOW 叠加，防"闪一下"
+```
+
+### 未验证 / 下一步
+
+1. 修复后的视觉确认要用户重装后自己看一眼（本机复现不出闪窗，无法给出前后对比截图）。
+2. 若重装后仍然闪，下一个怀疑对象是**属性页首帧**（页面对话框在布局完成前的一帧），
+   那时再按"首帧自绘/背景"方向查；目前的证据不足以指到那一条。
+3. `.ico` 作为 `UninstallDisplayIcon` 只在探针安装器上验过（ExtractIconEx = 1）；
+   真实安装器的整机安装需要用户提权重跑，我这边没有跑。

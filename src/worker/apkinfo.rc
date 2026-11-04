@@ -17,7 +17,7 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", APKSX_PRODUCT_NAME
+            VALUE "CompanyName", APKSX_PUBLISHER
             VALUE "FileDescription", "Package metadata parser (JSON worker)"
             VALUE "FileVersion", APKSX_VERSION_FULL
             VALUE "InternalName", "apkinfo"
@@ -29,7 +29,7 @@ BEGIN
         END
         BLOCK "080404b0"
         BEGIN
-            VALUE "CompanyName", APKSX_PRODUCT_NAME
+            VALUE "CompanyName", APKSX_PUBLISHER
             VALUE "FileDescription", "安装包元数据解析器（JSON worker）"
             VALUE "FileVersion", APKSX_VERSION_FULL
             VALUE "InternalName", "apkinfo"

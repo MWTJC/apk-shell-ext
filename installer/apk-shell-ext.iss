@@ -15,7 +15,7 @@
 
 #define AppName "apk-shell-ext"
 #define AppVersion "1.0.0"
-#define AppPublisher "apk-shell-ext"
+#define AppPublisher "MWTJC"
 #define AppId "{{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B03}"
 
 [Setup]
@@ -57,7 +57,9 @@ WizardStyle=modern
 OutputDir=..\out\dist
 OutputBaseFilename=apk-shell-ext-setup-{#AppVersion}
 UninstallDisplayName={#AppName} (package icons + info page)
-UninstallDisplayIcon={app}\apkthumb.dll
+; 控制面板里的图标：必须给一个有 icon 资源的文件或 .ico。apkthumb.dll 里没有 ICON 资源，
+; 指向它时 ExtractIconEx 返回 0 个图标 → 控制面板显示空白（实测）。
+UninstallDisplayIcon={app}\icons\apk.ico
 SetupIconFile=..\icons\apk.ico
 LicenseFile=..\LICENSE
 ; 安装器界面只有英文：官方发行版不带中文 .isl，第三方翻译不入库（见 docs/m5-delivery.md）

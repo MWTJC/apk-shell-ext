@@ -12,3 +12,6 @@
 
 // 安装器在 HKCU\Software\apk-shell-ext 里记的"安装版本"，升级检测用
 #define APKSX_PRODUCT_NAME "apk-shell-ext"
+
+// 发布者：控制面板"已安装的应用"里的 Publisher，以及二进制的 VERSIONINFO CompanyName
+#define APKSX_PUBLISHER "MWTJC"
