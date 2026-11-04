@@ -914,3 +914,62 @@ xapk_truncated.xapk     apkinfo exit=2  「未找到 ZIP 结束记录（不是�
 4. **容器根 `icon.png` 兜底**：两个样本的 base 里都有 launcher 图标，兜底路径只被代码覆盖，未被样本触发。
 5. 嵌套两层以上（zip 套 zip 套 zip）没有测；`formats.md §8` 的限额是 ≤ 2 层。
 6. `.hap`（M4d 对象）不在本记录范围内。
+
+## 20. R-0012 记录（M4d · 鸿蒙 .hap，2026-11-04）
+
+### 环境
+
+与 §0 基线一致；扩展以 HKCU 注册（`.apk/.xapk/.apks/.apkm/.hap` 五个扩展名）；
+本记录开始前重启过 `explorer.exe`（换新 DLL）。
+
+### 变更
+
+- 新增 `src/core/hap.{h,cpp}`：`module.json`（JSON）解析 + `$media:` 图标三级启发式；
+  `LooksLikeHap()` 的判定放在 APK/容器之前（根上有 `module.json`、没有 `AndroidManifest.xml`）。
+- `apk_info` 增加 `hap` 分支（`ScanHapZip`）与 `HapInfo`；worker JSON 增加 `hap` 块，`kind` 写 `hap`。
+- 属性页：技术组显示 模块 / 主 Ability / API 版本 / 编译 SDK / 设备类型 / Ability 计数，
+  文件组显示「安装包类型 HAP（鸿蒙）」「名称引用 `$string:…`」；**签名行改成"未解析（HAP 签名块 v1 不做）"**——
+  HAP 的签名不是 APK Signing Block，写"可能未签名"是假信息。
+- `register.ps1` 默认扩展名加 `.hap`；新增 `tests/verify_hap.py`；`tests/gen_container_fixtures.py` 增加 3 个坏 HAP。
+
+### 结果 · 真实样本
+
+```
+$ python tests/verify_hap.py "tests/fixtures/real/*.hap"
+  ShuaTiBao108.hap: com.xm.ShuaTi 1.0.0 (1000000) module=entry
+      icon=resources/base/media/foreground.png [png 512x512] 0.48 ms
+  entry-default-unsigned.hap: com.libretv.panpp 2.3.6 (1100140) module=entry
+      icon=resources/base/media/app_icon.png [png 512x512] 1.95 ms
+2/2 HAP matched module.json cross-check
+```
+
+交叉校验内容：bundleName / versionName / versionCode / min–targetAPIVersion / module.name / type /
+mainElement / deviceTypes / abilities / extensionAbilities / requestPermissions 全部等于 `module.json`；
+图标条目在 ZIP 里存在、字节是真 PNG、像素尺寸等于 `icon.width/height`。
+
+| 样本 | kind | 模块 | Ability | 图标来源 | worker | 缩略图（进程内 / 经 shell） |
+| --- | --- | --- | --- | --- | --- | --- |
+| ShuaTiBao108.hap（408 KB） | hap | entry | 1 + Extension 1 | `foreground.png`（layered 的 foreground 层）512² | 0.49–0.63 ms | 41 ms / 87 ms（冷） |
+| entry-default-unsigned.hap（2.2 MB） | hap | entry | 1 | `app_icon.png` 512² | 0.48–1.95 ms | 41 ms / 61 ms（冷） |
+
+- 属性页：HAP 页 **156–172 ms** 出全页（`docs/evidence/m4d-hap-propsheet.png`）。
+- Explorer：两个 `.hap` 在"大图标"视图里都显示应用图标（`docs/evidence/m4d-hap-explorer.png`）。
+- 坏样本（`tests/gen_container_fixtures.py` 造）：
+
+```
+hap_bad_json.hap     apkinfo exit=2  「module.json 不是合法 JSON：字符串未结束（偏移 35）」
+hap_no_bundle.hap    apkinfo exit=2  「module.json 里没有 bundleName」
+hap_no_icon.hap      apkinfo exit=0  元数据正常，warnings = 未找到可用图标（缩略图 ok:false）
+```
+
+  三个的 `thumbtest --file` 全部 `ok:false`、1.7–1.9 ms，进程不崩。
+
+### 未验证（不许当作通过）
+
+1. **`$string:` 标签**：两个样本的应用名都是 `$string:app_name`，页面回落文件名并在「名称引用」行标注。
+   解析要读 `resources.index`（RestoolV2 私有格式，头部 `RestoolV2 6.0.0.001`），v1 不做。
+2. **layered icon 合成**：只取 foreground 层（刷题宝那张白底红字，缩略图里可读）；没有做前景+背景叠加。
+3. **`.hsp` / `.app` 多模块套件**：v1 只认单个 HAP。
+4. **`libs/<abi>/*.so`**：两个样本都不带原生库，`abis` 的那段代码没有被真实数据覆盖。
+5. **HAP 签名**：鸿蒙的签名块没有解析，页面如实写"未解析"，不是"未签名"。
+6. `resources.index` 里的 id→文件名映射（`$media:16777218` 这类）没有实现。

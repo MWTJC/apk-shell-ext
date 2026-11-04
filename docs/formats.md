@@ -61,9 +61,26 @@
 
 - 结构：`module.json`（模块元数据，JSON）+ `pack.info` + `resources.index`（二进制）+ `resources/base/media/…` + `.abc`（ArkTS 字节码）。
 - `module.json` 里 `app.bundleName` / `module.name` / `versionCode` / `versionName` / `minAPIVersion` / `targetAPIVersion` / `deviceTypes`。
-- 图标：`module.json` 的 `abilities[].icon` 形如 `$media:app_icon` → 在 `resources.index` 里查到资源 ID → 映射到 `resources/base/media/app_icon.png`。
-- **`resources.index` 是鸿蒙自有格式**（非 `arsc`），需要按官方 `ResourceTable` 结构解析；M4 先做"按 `$media:` 名字直接猜 `resources/base/media/<name>.*`"的启发式（覆盖大多数包），索引解析放 M4b。
-- 分模块包（`.hsp` / `.app` 套件）v1 不做。
+
+**M4d 实施（2026-11-04，记录 [verification.md R-0012](verification.md)）**
+
+- **判定**：ZIP 根上有 `module.json` 且没有 `AndroidManifest.xml` → HAP（`LooksLikeHap`）。HAP 与 APK 走同一个 `ZipReader`，
+  缩略图/worker/属性页共用 `src/core/hap.cpp` 这一份解析。
+- **字段**：`app.bundleName` → `app.package`，`versionName/versionCode`，`minAPIVersion/targetAPIVersion` →
+  `hap.minAPI/targetAPI`（**不写进 `app.minSdk/targetSdk`**：鸿蒙的 API 号与 Android 的 SDK 不是一回事，混写就是撒谎），
+  `module.name/type/mainElement`、`deviceTypes`、`abilities` / `extensionAbilities` 计数、
+  `module.requestPermissions[].name` → `permissions`、`libs/<abi>/*.so` → `abis`。
+- **图标（`$media:` 启发式，三级）**：
+  1. `app.icon` = `$media:NAME` → `resources/base/media/NAME.{png,webp,jpg,jpeg}`；
+  2. `NAME.json` 是 layered icon：读 `{"layered-image":{"background":"$media:…","foreground":"$media:…"}}`，
+     先前景后背景，**按 JSON 的键名推断文件名**（`foreground.png` / `background.png`）——
+     因为鸿蒙在这里写的是**资源 id**（如 `$media:16777218`），id→文件名要解 `resources.index`；
+  3. 兜底：第一个 ability 的 `startWindowIcon` → 约定名 `app_icon/icon/AppIcon` → `resources/base/media` 里最大的 PNG。
+- **不做（v1）**：`$string:app_name` 标签（要解 `resources.index`，属性页回落文件名并在「名称引用」行如实标注）；
+  layered icon 的**合成**（只取 foreground 层，白底图在缩略图里可读）；`.hsp` / `.app` 套件（多模块）。
+- **真实样本（不入库）**：`ShuaTiBao108.hap`（`$media:layered_image` → foreground 512²，1.0.0）、
+  `entry-default-unsigned.hap`（`$media:app_icon` → app_icon 512²，2.3.6，3 条 ohos 权限，4 种设备类型）；
+  两个包与 `module.json` 的交叉校验 2/2 一致（`tests/verify_hap.py`）。
 
 ## 6. APPX / MSIX
 

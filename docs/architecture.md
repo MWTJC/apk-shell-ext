@@ -112,7 +112,7 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 ```json
 {
   "schema": 1,
-  "kind": "apk",                       // apk | xapk | apks | apkm | splits（后四种 = 多 APK 容器）
+  "kind": "apk",                       // apk | xapk | apks | apkm | splits | hap
   "file": {"path": "D:\\x\\a.apk", "size": 12345678, "mtime": 1762000000,
            "sha256": "…"},              // sha256 仅在 --hash 时出现
   "app": {"package": "com.example.app", "label": "示例应用",
@@ -123,6 +123,12 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
     "kind": "xapk", "base": "com.example.app.apk", "apkCount": 2,
     "splits": [{"name": "com.example.app.apk", "size": 15812534, "kind": "base", "base": true},
                {"name": "config.armeabi_v7a.apk", "size": 6316540, "kind": "config"}]
+  },
+  "hap": {                              // 只在鸿蒙 .hap 里出现（M4d）
+    "module": "entry", "type": "entry", "mainAbility": "EntryAbility",
+    "minAPI": 60000020, "targetAPI": 60000020, "compileSdk": "6.0.0.47",
+    "deviceTypes": ["phone"], "abilities": 1, "extensionAbilities": 1,
+    "labelRef": "$string:app_name"      // 清单里是资源引用时如实报出，v1 不解析
   },
   "icon": {"source": "res/mipmap-xxhdpi-v4/ic_launcher.png", "width": 144, "height": 144,
            "adaptive": false, "fromContainer": false},   // fromContainer 仅在退到根 icon.png 时出现
@@ -137,6 +143,7 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 
 `container.splits` 里 `kind` 目前只有三档：`base` / `config`（名字以 `config.` 开头）/ `other`。
 所有 `app.*` / `signature` 字段描述的都是**base APK**（v1 不做跨 split 合并），`file.size` 才是外层容器大小。
+`.hap` 的 API 号只出现在 `hap.minAPI/targetAPI`：`app.minSdk/targetSdk` 对 HAP 留空，鸿蒙的 API 版本与 Android 的 SDK 不是一回事。
 
 字段只增不改；破坏性变更升 `schema`。缺字段一律省略而不是 `null`，便于 UI 判断。
 

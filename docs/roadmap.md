@@ -21,7 +21,7 @@ flowchart LR
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
 | M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | ✅ 完成（2026-11-04）：JSON + aapt2 交叉校验、TD-001 关闭、签名块、features、`splits`（随 M4a）全部落地；仅剩 TD-002 与 V8 回归 |
 | M3 | 属性页 | `apkprop.dll`（原生控件、异步、错误态、复制、可折叠分组） | 2–3 d | ✅ 用户已验收（[R-0006](verification.md)·[R-0009](verification.md)·[R-0010](verification.md)）；DPI 由布局单测覆盖（[R-0011](verification.md)） |
-| M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | 🟡 M4a ✅（.xapk/.apks/.apkm，[R-0011](verification.md)）；M4b–e 未开始 |
+| M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | 🟡 M4a ✅（.xapk/.apks/.apkm，[R-0011](verification.md)）· M4d ✅（.hap，[R-0012](verification.md)）；M4b/M4c/M4e 未开始 |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
 
 **M0 评审记录（2026-11-03）**——三项决策已确认，后续实现不得再讨论：
@@ -242,6 +242,19 @@ flowchart LR
 - **只测过 `.xapk` 真实样本**；`.apks`（bundletool）与 `.apkm`（APKMirror）只有启发式 + 坏样本，
   拿到真实样本前不要宣称支持。
 
+**M4d 实施记录（2026-11-04，记录 [R-0012](verification.md)）**
+
+- `src/core/hap.{h,cpp}`：`module.json` 解析（json_lite）+ `$media:` 图标三级启发式
+  （名字 → layered json 的键名 → `startWindowIcon`/约定名/最大 PNG）。
+- 判定顺序改成 HAP 优先：根上有 `module.json` 且没有 `AndroidManifest.xml` → HAP；否则走 APK / 容器。
+  三条路径（缩略图、worker、属性页）仍然共用同一份判定与同一个 `ZipReader`。
+- JSON 增加 `hap` 块；**不把鸿蒙 API 号塞进 `app.minSdk/targetSdk`**；属性页技术组显示
+  模块 / 主 Ability / API 版本 / 编译 SDK / 设备类型 / Ability 计数，文件组显示「安装包类型 HAP（鸿蒙）」
+  与「名称引用 `$string:app_name`（v1 不解析）」。
+- `register.ps1` 默认扩展名加 `.hap`。新增 `tests/verify_hap.py`（对 `module.json` + 图标字节/尺寸交叉校验）。
+- **v1 明确不做**：`$string:` 标签解析（要解 `resources.index`，RestoolV2 私有格式）、layered icon 的合成
+  （只取 foreground 层）、`.hsp`/`.app` 多模块套件。拿到更多样本前不要扩大承诺。
+
 按"复用成本从低到高"排序，每个子阶段独立验收：
 
 | 子阶段 | 内容 | 估时 | 关键验收 |
@@ -249,7 +262,7 @@ flowchart LR
 | M4a | `.apks/.xapk/.apkm`（外层 ZIP + base.apk；`icon.png` 兜底） | 1 d | ✅ 2026-11-04（[R-0011](verification.md)）：2 个真实 xapk 与 aapt2 一致、Explorer 里出图标、属性页有「分包」组 |
 | M4b | `.aab`（`BundleConfig.pb`、**protobuf manifest**、`resources.pb`） | 2–3 d | 3 个 AAB：包名/版本/模块列表正确；图标与 bundletool 生成的一致 |
 | M4c | `.ipa`（binary plist；AppIcon 约定名 → iTunesArtwork → `Assets.car` 回退） | 2 d | 3 个 IPA：bundleId/版本正确；≥ 2 个能出高清图标（car 失败要能回退） |
-| M4d | `.hap`（`module.json`；`$media:` → `resources.index` 启发式 → 索引解析） | 2–3 d | 3 个 HAP：bundleName/versionName 正确；≥ 2 个出图标 |
+| M4d | `.hap`（`module.json`；`$media:` → `resources.index` 启发式 → 索引解析） | 2–3 d | ✅ 2026-11-04（[R-0012](verification.md)）：2 个真实 HAP 与 `module.json` 一致、Explorer 出图标、属性页有模块/API/权限组；`$string:` 标签与 layered 合成未做 |
 | M4e | `.appx/.msix`（`AppxManifest.xml` + 限定符选图） | 0.5 d | 2 个包正确 |
 
 **验收（跨格式）**

@@ -4,7 +4,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 ✅（R-0002）· M2 ✅（R-0005，`splits` 随 M4a）· M3 ✅（R-0006/0009/0010/0011）· M4a ✅（.xapk/.apks/.apkm，R-0011）** |
+| 阶段 | **M1 ✅（R-0002）· M2 ✅（R-0005，`splits` 随 M4a）· M3 ✅（R-0006/0009/0010/0011）· M4a ✅（.xapk/.apks/.apkm，R-0011）· M4d ✅（.hap，R-0012）** |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
 | 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，✅ JSON v1）· `apkprop.dll`（属性页，✅） |
 | 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
@@ -60,12 +60,15 @@ python tests\verify_apkinfo.py tests\fixtures\generated\*.apk
 python tests\gen_container_fixtures.py --real tests\fixtures\real\*.xapk
 python tests\verify_container.py "tests\fixtures\real\*.xapk"
 
+:: 3c) 鸿蒙 HAP（M4d）：没有官方 CLI，直接对包里的 module.json 交叉校验
+python tests\verify_hap.py tests\fixtures\real\*.hap
+
 :: 4) 单元验收（直接驱动 provider，不依赖 explorer）
 out\x64\thumbtest.exe --probe tests\fixtures\generated\f_png.apk
 out\x64\thumbtest.exe --file  tests\fixtures\generated\f_webp.apk --out C:\tmp\w.png
 out\x64\thumbtest.exe --dir   tests\fixtures\generated --repeat 3 --json
 
-:: 5) 注册（免 UAC，写 HKCU\Software\Classes；默认 .apk/.xapk/.apks/.apkm）→ 资源管理器切"大图标"即可看到包内图标
+:: 5) 注册（免 UAC，写 HKCU\Software\Classes；默认 .apk/.xapk/.apks/.apkm/.hap）→ 资源管理器切"大图标"即可看到包内图标
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Install
 out\x64\thumbtest.exe --shell --file D:\somewhere\app.apk     :: 走 Explorer 同一条管线
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
@@ -137,13 +140,22 @@ deflate 的 base 整块解压且上限 512 MB。JSON 新增 `container` 块（`b
 PUBG（1.25 GB）缩略图 35/20 ms（冷/热）、worker 9.5–12.4 ms；2/2 与 aapt2 一致；4 个坏容器全部优雅失败。
 **注意**：`.apks`（bundletool）与 `.apkm`（APKMirror）只有启发式 + 坏样本，没有真实样本验证。
 
+**M4d 已完成（2026-11-04，记录 [verification.md R-0012](docs/verification.md)）**
+
+鸿蒙 `.hap`：`module.json`（JSON）直读（`src/core/hap.cpp`），判定放在 APK/容器之前；
+图标走 `$media:` 三级启发式（名字 → layered json 的 `foreground`/`background` 键名 → `startWindowIcon`/约定名/最大 PNG）。
+JSON 新增 `hap` 块（模块 / 主 Ability / min-targetAPI / 编译 SDK / 设备类型 / Ability 计数 / labelRef），
+**不把鸿蒙 API 号塞进 `app.minSdk/targetSdk`**；属性页有模块/API/设备类型/Ability/权限，签名行如实写"未解析"。
+实测：两个 HAP 与 `module.json` 交叉校验 2/2、缩略图 41 ms（经 shell 87/61 ms）、属性页 156–172 ms、worker < 2 ms。
+**不做**：`$string:` 标签（要解 RestoolV2 的 `resources.index`）、layered 合成、`.hsp`/`.app` 套件、HAP 签名块。
+
 **下一步（建议顺序）**
 
-1. M4d：`.hap`（样本已在 `tests/fixtures/real`：`ShuaTiBao108.hap`、`entry-default-unsigned.hap`）——
-   复用同一层容器逻辑，`module.json` 是 JSON，比 AAB 便宜。
-2. M4b：`.aab`（protobuf manifest，最贵的一块）→ M4c `.ipa` → M4e `.appx`。
-3. M3 尾巴：真实 150%/200% 显示缩放下的人眼确认（布局数学已自动断言，见 R-0011）。
-4. M2 尾巴：TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
+1. M4e：`.appx/.msix`（XML 清单 + 限定符选图，估 0.5 d，最便宜的一块）。
+2. M4b：`.aab`（protobuf manifest，最贵的一块）→ M4c `.ipa`（binary plist / Assets.car）。
+3. HAP 增强（可选）：`resources.index` 解析 → 应用名与 id→文件名映射；layered icon 合成。
+4. M3 / M2 尾巴（用户 2026-11-04 明确说"算边缘情况，等遇到问题再说"）：真实 150%/200% 人眼确认、
+   TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
 
 **接力说明**（下一会话从这里开始）
 
@@ -152,6 +164,7 @@ PUBG（1.25 GB）缩略图 35/20 ms（冷/热）、worker 9.5–12.4 ms；2/2 �
   `python tests\gen_container_fixtures.py --real <xapk>`（4 个坏容器）。
 - 真实样本：`tests\fixtures\real\`（3 个普通包 + 2 个 `.xapk` + 2 个 `.hap` + `big\` 里 1.26 G / 1.92 G 各一个），**gitignore，不入库**。
 - 验收：`python tests\verify_apkinfo.py <apk...>`（对 aapt2）、`python tests\verify_container.py "<xapk-glob>"`、
+  `python tests\verify_hap.py "<hap-glob>"`、
   `out\x64\propsheet_model_test.exe --selftest`（行模型 + 布局/DPI 断言）、`out\x64\thumbtest.exe --dir <目录> --json`、
   `out\x64\thumbtest.exe --shell --file <apk>`（走 Explorer 管线）、`out\x64\apkinfo.exe --json <apk>`。
 - 扩展当前**已注册**（HKCU）：`powershell -File tools\register.ps1 -Uninstall` 可撤；诊断日志需手动开 `%TEMP%\apk-shell-ext.debug.on`。
