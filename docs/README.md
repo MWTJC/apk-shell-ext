@@ -5,7 +5,7 @@
 
 | 文档 | 回答的问题 | 何时读 |
 | --- | --- | --- |
-| [../README.md](../README.md) | 项目是什么、当前阶段、目录结构 | 第一次进入 |
+| [../README.md](../README.md) | 项目是什么、怎么装、能干什么（面向访客） | 第一次进入 |
 | [design.md](design.md) | **设计出发点**：为什么要"缩略图先行、元数据懒解析"；四条接口的调用频率对比；既有方案（HashTab/果核/ApkShellext2）的实测结论 | 想改设计前 |
 | [architecture.md](architecture.md) | 组件与进程边界、三个产物的契约、JSON schema v1、注册表契约、缓存 | 写代码前 |
 | [formats.md](formats.md) | 安装包的容器/manifest/资源表/图标位置矩阵与安全限额（v1 实做 APK 家族 + HAP；AAB/IPA/APPX 保留结构备查） | 做 M4 时 |
@@ -13,6 +13,8 @@
 | [verification.md](verification.md) | 把"无感"变成可复现的数字：ProcMon 配方、耗时/内存判据、R-0001~R-0014 记录表 | 每阶段收尾 |
 | [m5-delivery.md](m5-delivery.md) | M5 交付：Inno 安装器、格式图标、VERSIONINFO、i18n、装好之后的命令；含未做清单 | 用/改交付形态前 |
 | [install.md](install.md) | 用户手册：装/卸/静默/便携/清缓存/开诊断/FAQ（会随安装包落到安装目录） | 装或卸之前 |
+| [development.md](development.md) | **开发与构建**：工具链发现、打包与版本号同步、夹具与验收命令、当前阶段、接力说明、变更纪律 | 要改代码 / 接手项目 |
+| [release.md](release.md) | **发布流程**（手工，无 CI）：版本号规则、发版检查单、Release notes 模板、上传清单 | 每次发版 |
 | [adr/](adr/README.md) | 架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主、格式范围、分发与安装形态、功能开关与升级策略） | 想推翻某个约束前 |
 
 ## 写作约定

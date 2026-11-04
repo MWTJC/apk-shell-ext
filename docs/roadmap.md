@@ -351,6 +351,6 @@ egister.ps1 -Install/-Uninstall`（含 `-Feature Thumb|Propsheet|Icons`、`-Scop
 ## 7. 每阶段结束必做（DoD）
 
 1. 在 `docs/verification.md` 追加一条记录：命令、原始输出、结论、未验证项。
-2. 更新本文件顶部的状态表与 `README.md` 的阶段行。
+2. 更新本文件顶部的状态表与 `docs/development.md` §7「当前状态」。
 3. 有决策变更 → 新 ADR（编号递增，不修改旧 ADR 的结论，只追加修订段）。
 4. 代码与文档不一致时，以"能跑的证据"为准，改文档。

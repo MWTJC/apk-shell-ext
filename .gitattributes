@@ -1,0 +1,12 @@
+# Keep Windows scripts CRLF on checkout even for people whose core.autocrlf is off
+# (LF-only .cmd can break goto/labels), and keep binaries untouched.
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.iss   text eol=crlf
+
+*.ico   binary
+*.png   binary
+*.gif   binary
+*.ttf   binary
+*.dat   binary
