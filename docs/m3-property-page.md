@@ -1,6 +1,7 @@
 # M3 · 属性页（`apkprop.dll`）设计方案
 
-> 状态：**已评审、已实现（2026-11-04）**。§12 的四项决策见文末"决策记录"，实现与实测见 §14。
+> 状态：**已评审、已实现、已验收（2026-11-04，用户确认）**。
+> §12 的四项决策见"决策记录"，实现与实测见 §14；**视图层在 §16 改为原生控件**（§8 的全自绘结论已作废）。
 > 相关：[architecture.md §2.2/§4](architecture.md)、[roadmap.md · M3](roadmap.md)、[ADR-0003](adr/0003-out-of-proc-parser.md)、[design.md · P4](design.md)
 > 本文不新增 ADR：**进程边界与调用频率都不变**（worker 仍是每次调用一个进程、属性页仍只在"打开属性"时触发），
 > 按 project 纪律属于"不需要 ADR"的改动。
@@ -14,9 +15,10 @@
 
 **做**
 
-1. 单页「安装包信息」，形态参照 HashTab：顶部标识区 + 4 个字段组 + 底部状态区。
+1. 单页「安装包信息」：顶部标识区 + 5 个分组（应用 / 技术 / 权限 / 特性 / 文件与签名，
+   后两组默认收起）+ 底部状态区；控件形态参照资源管理器"详细信息"页。
 2. 字段全部来自 `apkinfo.exe --json`（schema v1），页面不自己解析 APK（唯一例外：`GetFileAttributesExW` 取大小/时间，成本 ~0.1 ms）。
-3. 错误态、取消、跟随意题的亮暗、高 DPI、逐行复制。
+3. 错误态、取消、亮暗交给系统（页内不自带配色）、高 DPI、逐行复制。
 
 **不做（v1）**
 
@@ -27,7 +29,7 @@
 
 ## 2. 布局（冻结）
 
-页面尺寸 **420 × 470 DIP**（属性对话框常见宽度；150% DPI 下 630 × 705 px，屏幕放得下）。
+页面模板 **240 × 240 DLU**（`IDD_APKPROP`）；实测窗口 `484 × 658 px`（100% DPI，含标题栏与 7 个标签）。
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -84,7 +86,10 @@
 | A2 `SysListView32` report + ownerdraw | 需要 `SetWindowTheme("DarkMode_Explorer")`，表头/边框仍有白边 | 可 | 现成（多选、Ctrl+C 要自己挂） | 好 | ~400 行 + 主题补丁 |
 | A3 标准 Static + 只读 Edit 拼装 | 每个控件都要 `WM_CTLCOLORSTATIC` 单独处理，滚动要自己做 | 可 | 现成 | 好 | ~350 行但观感最差 |
 
-**推荐 A1**（已采用）：本页本质是"一张两列表格"，自绘只负责排版；**颜色一律向宿主/系统要**（见 §7），
+> **本节是设计期结论，已被 [§16](#16-决策反转视图层改用原生控件2026-11-04) 推翻**：
+> 视图层最终用原生控件（`SysListView32` + `STATIC` + `BUTTON`），全自绘代码已删除。保留本节用于说明当时的取舍。
+
+**当时推荐 A1**（曾采用）：本页本质是"一张两列表格"，自绘只负责排版；**颜色一律向宿主/系统要**（见 §7），
 所以自绘不再意味着"自己发明配色"。
 HashTab 也是自绘列表，用户对"属性页里能选中复制"的预期它已经立好了。代价是无障碍弱，记为已知限制。
 **逃生舱**：如果自绘超过 600 行还有毛刺，退回 A2（`LVS_OWNERDRAWFIXED` + 自绘滚动条）。
@@ -212,7 +217,7 @@ src/propsheet/
 ├─ prop_page.cpp        IShellPropSheetExt + IPersistFile + 页面生命周期状态机
 ├─ worker_client.cpp    QuoteArg / CreateProcessW / Job / 读管道 / 超时 / 取消
 ├─ page_model.{h,cpp}   JSON → 行模型（不含 UI 依赖，可单测）
-├─ page_paint.cpp       自绘（分组、行、省略号、滚动条、命中测试）
+├─ page_list.cpp        原生 ListView（分组、列宽、行填充、定位滚动）   ← 计划稿里的自绘件已删，见 §16
 └─ theme.{h,cpp}        6 个颜色令牌 + 字体 + DPI 缩放
 tests/propsheet_model_test.cpp   直接驱动 page_model（无 GUI），用现有夹具的 JSON 断言
 ```
@@ -232,11 +237,13 @@ tests/propsheet_model_test.cpp   直接驱动 page_model（无 GUI），用现�
 
 | # | 风险 | 应对 |
 | --- | --- | --- |
-| P1 | 自绘列表无障碍差（Narrator 读不到） | 记为已知限制；至少给整页 `WM_GETOBJECT` 返回 `ROLE_SYSTEM_PANE` + 文本摘要 |
+| P1 | ~~自绘列表无障碍差~~ | **已消除**：视图层改为原生 `SysListView32`（§16），Narrator 能读行与列 |
 | P2 | 150% DPI 下长包名/长证书主题溢出 | 单行省略 + tooltip + 复制全文；DPI 用例覆盖 200% |
 | P3 | explorer 的深色接口在不同 build 上表现不一致 | 不猜：背景/文字直接问宿主（`WM_CTLCOLOR*`），其余用 `GetSysColor`；不调用未公开的 `SetPreferredAppMode` |
 | P4 | 杀软拦截 `CreateProcess` 使冷开变慢/失败 | 错误态明确提示；M5 代码签名后复测 |
-| P5 | 属性页 handler 在 explorer 里崩溃 | 全部入口 `try/catch`；解析在 worker；`/guard:cf` 已有 |
+| P5 | 属性页 handler 在 explorer 里崩溃 | 全部入口 `try/catch`；解析在 worker；`/guard:cf` 已有。**已发生一次**：`DWLP_USER` 类型不一致导致打开即 AV（R-0009），已修 |
+| P6 | 宿主无 comctl32 v6 时没有分组带，"权限/特性"明细失去上下文 | 探测 `DllGetVersion`：v5 时把组标题降级成普通行（§16.2）；此时不可折叠 |
+| P7 | 折叠状态不持久 | 每次打开都回到默认收起；需要记住的话另开（写 `HKCU`） |
 
 ## 14. 实施记录（2026-11-04）
 
@@ -248,12 +255,13 @@ src/propsheet/
 ├─ prop_page.cpp                      IShellPropSheetExt + IPersistFile + IShellExtInit、线程、取消、剪贴板
 ├─ worker_client.{h,cpp}             QuoteArg / CreateProcessW / Job(KILL_ON_JOB_CLOSE) / 管道 / 超时
 ├─ page_model.{h,cpp}                JSON → 行模型（wchar_t，无 UI 依赖，可单测）
-├─ page_view.{h,cpp}                 布局 + 全自绘（组标题/行/子项/省略号/底栏按钮/命中测试）
-├─ theme.{h,cpp}                     6 个配色令牌 + SPI 字体 + DPI
+├─ page_list.{h,cpp}                 原生 ListView：样式/列宽/分组（可折叠）/行填充/定位滚动
+│                                    （原 page_view.{h,cpp} 全自绘已在 §16 删除）
+├─ theme.{h,cpp}                     宿主字体 + DPI（配色令牌已随自绘一起删除，§16）
 └─ apkprop.{rc,def,h}                对话框模板（无控件）、字符串、VERSIONINFO、导出表
 src/core/json_lite.{h,cpp}           最小 JSON 解析（进 explorer 的代码不引第三方）
-tests/propsheet_model_test.cpp       行模型单测（26 条断言，不需要窗口）
-tests/proptest.cpp                   显式加载 DLL → AddPages → PropertySheetW，可直接截图
+tests/propsheet_model_test.cpp       行模型单测（29 条断言，不需要窗口）
+tests/proptest.cpp                   显式加载 DLL → AddPages → PropertySheetW；另有 --list-json 模式直接画 ListView 截图（v6 主题/分组带验证）
 tools/capture-propsheet.ps1          打开属性对话框 → 选标签 → 可选点击/滚轮 → 只截该窗口
 ```
 
@@ -294,7 +302,7 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 
 ### 已知限制 / 未验证
 
-1. 无障碍：自绘列表对 Narrator 不友好（§13 P1 已登记，v1 接受）。
+1. ~~无障碍：自绘列表对 Narrator 不友好~~ —— 已随原生控件消除（§16）。
 2. **150% / 200% DPI 未实测**（当前机器 100%）；页内跟窗口的一致性已截图为证（系统深色时页内仍是浅色）。
 3. 100 次开关的句柄趋势未做（10 次已做，见 R-0006）；`worker 崩溃` 用标志文件钩子验证通过
    （`%TEMP%\pk-shell-ext.test-abort.on` → `ExitProcess(0xC0000005)`）。
@@ -376,3 +384,14 @@ v5 时把**组标题降级成普通行**插在明细前面（`应用`、`技术`
 
 > 坑：`LVM_ENABLEGROUPVIEW` 的**返回值不能用来判断**——它在 v6 上也会返回 FALSE。
 > 早先按返回值走降级分支，结果列表停在"分组模式但条目不属于任何组"的状态，整表空白。
+
+### 16.3 验收（用户确认，2026-11-04）
+
+用户在资源管理器真实宿主下确认：
+
+1. 控件是系统新外观，**跟随系统主题**（亮/暗）；
+2. `权限`、`特性` 两个分组带的箭头可**鼠标单击折叠/展开**；
+3. 默认态为**收起**，整页不需要滚动就能看全五六组。
+
+至此 M3 的主要验收项全部通过；剩下未测的只有 150%/200% DPI 下的排版与深色主题截图（见
+[verification.md R-0009/R-0010](verification.md) 的"未验证"）。

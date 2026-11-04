@@ -76,7 +76,7 @@ flowchart LR
 | 异步 | 工作线程读管道；`WM_APP+1` 回填；页面销毁时置取消标志，线程 detached 且不触碰已销毁 HWND |
 | 失败 | 显示具体原因（"不是有效安装包"/"资源表损坏"/"解析超时"），保留"复制诊断信息"按钮 |
 | 复制 | 每个字段可右键复制；另有"复制全部为 JSON" |
-| DPI/主题 | 按 `WM_DPICHANGED` 缩放；深色模式读 `AppsUseLightTheme`，控件用 `SetWindowTheme`/`DwmSetWindowAttribute` |
+| DPI/主题 | 原生控件自己跟随系统主题与 DPI；我们只在 `WM_DPICHANGED / WM_SETTINGCHANGE` 时重新向宿主要字体并重排 |
 
 **为什么不用自定义 `IPropertyStore`**：见 ADR-0002。属性页里的字段不参与排序/列，不需要进属性系统。
 
@@ -88,7 +88,9 @@ flowchart LR
   后者保证其它宿主（脚本/测试工具）也能用。
 - worker 挂在 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job 上：页面一关，job 句柄一关，worker 立刻消失；
   取消不等子进程自己退（`TerminateJobObject`）。
-- 字段顺序与分组冻结在 [m3-property-page.md §2](m3-property-page.md)。
+- 字段顺序与分组冻结在 [m3-property-page.md §2](m3-property-page.md)；`权限` / `特性` 各自是可折叠分组
+  （`LVGS_COLLAPSIBLE | LVGS_COLLAPSED`，默认收起，折叠由系统处理）。
+- 分组带依赖 comctl32 v6：`comctl32.dll` 的 `DllGetVersion` 主版本 < 6 时降级为"组标题当普通行"，此时不可折叠。
 
 ### 2.3 `apkinfo.exe`（worker）
 

@@ -790,6 +790,11 @@ python tests/verify_apkinfo.py tests/fixtures/generated/*.apk    # 6/6
 | `docs/evidence/m3-native-page.png` | 真实页面（v5 宿主）：组标题降级为行，明细可读 |
 | `docs/evidence/m3-native-v5-fallback.png` | v5 降级形态：`应用 / 技术 / 权限 · 6 项 / 特性 · 4 项…` 作为行出现 |
 
+### 用户确认（2026-11-04）
+
+资源管理器真实宿主下：箭头可鼠标单击折叠/展开、默认收起、控件跟随系统主题——用户回复"目前没有问题"。
+M3 主要验收项到此全部通过。
+
 ### 结构变化
 
 - 分组由 4 个变 5 个：`应用 / 技术 / 权限 / 特性 / 文件与签名`，`组件` 行留在「技术」组。

@@ -4,7 +4,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 ✅（R-0002）· M2 收尾中**（签名块/uses-feature 已落地，`splits` 随 M4a）**· M3 ✅ 主体完成**（`apkprop.dll`，见 R-0006） |
+| 阶段 | **M1 ✅（R-0002）· M2 收尾中**（签名块/uses-feature 已落地，`splits` 随 M4a）**· M3 ✅ 已验收**（`apkprop.dll`，见 R-0006 / R-0009 / R-0010） |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
 | 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，✅ JSON v1）· `apkprop.dll`（属性页，✅） |
 | 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
@@ -99,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 **M3 已完成（2026-11-04，记录 [verification.md R-0006](docs/verification.md)）**
 
 `apkprop.dll`：右键属性里的「安装包信息」单页，**原生控件**（STATIC 头 + SysListView32 两列分组 + BUTTON 底栏，
-样式/深色/选中/无障碍都交给系统）；
+样式/深色/选中/无障碍都交给系统；`权限`、`特性` 两组可折叠、默认收起）；
 底色/文字/字体全部向属性窗口本身与系统色要，所以页内永远和窗口同风格（系统深色时也是浅色）。
 重绘走双缓冲 + 脏矩形（hover 只重画 1–2 行），快速划过不闪；tooltip 悬停停留后才出，且只在该行真被截断时出。
 `AddPages` 零 IO，`PSM_INITDIALOG` 之后起线程 → `apkinfo.exe`（挂在带 `KILL_ON_JOB_CLOSE` 的 Job 上）→
@@ -125,7 +125,7 @@ JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJo
 
 **下一步（建议顺序）**
 
-1. M3 剩余验收：150%/200% DPI、100 次开关的句柄趋势（worker abort / 卸载 / 亮暗跟随已补测）。
+1. M3 剩余验收：150%/200% DPI、100 次开关的句柄趋势（worker abort / 卸载 / 亮暗跟随 / 折叠交互已补测）。
 2. M4a：`.apks/.xapk/.apkm`（外层 ZIP + base.apk），顺带补 schema 的 `splits`。
 3. M2 尾巴：TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
 
