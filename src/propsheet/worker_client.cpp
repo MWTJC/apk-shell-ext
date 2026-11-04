@@ -142,9 +142,9 @@ WorkerOutput RunWorker(const std::wstring& exe, const std::wstring& file, bool w
 
   STARTUPINFOW si{};
   si.cb = sizeof(si);
-  // CREATE_NO_WINDOW 已经能挡住控制台窗口，但历史上有 Windows 版本仍会闪一下；
-  // 再叠加 STARTF_USESHOWWINDOW + SW_HIDE 是微软文档给出的双保险（属性页打开前那一瞬间的
-  // 黑框就来自这里：worker 是控制台子系统程序，在 WM_INITDIALOG 里被拉起）。
+  // worker 是控制台子系统程序，CREATE_NO_WINDOW 已经能挡住控制台窗口；
+  // 再叠加 STARTF_USESHOWWINDOW + SW_HIDE 只是微软文档给的双保险（个别 build 上仍会闪）。
+  // 注意：属性页打开前那一闪是 Win11 自己的"选择一个应用以打开文件"框，不是这里（见 R-0017）。
   si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
   si.wShowWindow = SW_HIDE;
   si.hStdInput = nul_input;

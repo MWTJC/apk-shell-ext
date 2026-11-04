@@ -1472,10 +1472,19 @@ si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
 si.wShowWindow = SW_HIDE;      // 与 CREATE_NO_WINDOW 叠加，防"闪一下"
 ```
 
+### 结果 · 用户复核（同日，整机覆盖安装）
+
+用户手动重跑安装包做了**整机覆盖安装**（`C:\Program Files\apk-shell-ext`），反馈两条：
+
+1. **控制面板条目正常了**：图标是绿纸页、发布者是 `MWTJC` —— 现象 1/2 关闭。
+2. **那一闪不是命令行窗口**：反复实测（约 5 次点开属性碰到 1 次，几种安装包都会）确认是
+   Win11 的**"选择一个应用以打开文件"**询问框，只露出外轮廓就消失。
+   这是 Explorer 对"没有默认打开方式"的文件类型自己的动作（`.apk/.xapk/.hap` 都没有 ProgID，
+   右边常驻"选取应用"），与本扩展无关 —— 本题不再追；worker 的 `SW_HIDE` 加固作为无害双保险保留。
+
 ### 未验证 / 下一步
 
-1. 修复后的视觉确认要用户重装后自己看一眼（本机复现不出闪窗，无法给出前后对比截图）。
-2. 若重装后仍然闪，下一个怀疑对象是**属性页首帧**（页面对话框在布局完成前的一帧），
-   那时再按"首帧自绘/背景"方向查；目前的证据不足以指到那一条。
-3. `.ico` 作为 `UninstallDisplayIcon` 只在探针安装器上验过（ExtractIconEx = 1）；
-   真实安装器的整机安装需要用户提权重跑，我这边没有跑。
+1. `CloseApplications=force` 强关 dllhost 的路径只在按用户安装上复跑过；整机安装的强关时序没有单独再验。
+2. `.ico` 作为 `UninstallDisplayIcon` 在真实整机安装上已由用户目视确认，但没有再跑 `ExtractIconEx` 断言。
+3. 若想让"选择一个应用"少出现，可以考虑注册 ProgID / `OpenWithProgids`；当前按
+   [architecture.md §4](architecture.md) 的约定**不碰文件关联**，不做。
