@@ -4,8 +4,10 @@
 
 .DESCRIPTION
     Writes exactly the keys described in docs/architecture.md section 4 and nothing else:
-      HKCR\.apk\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96}  = <ThumbCLSID>
+      HKCR\.<ext>\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96} = <ThumbCLSID>
       HKCR\CLSID\{ThumbCLSID}\InprocServer32                     = apkthumb.dll, Apartment
+    Extensions default to apk + the multi-APK containers (xapk/apks/apkm, M4a).
+    Pass -Extensions 'apk' to register only the plain extension.
     A JSON backup of every value we touch is written to
     %LOCALAPPDATA%\apk-shell-ext\install-backup.json so -Uninstall can restore the
     previous state exactly (V6: registry diff must be empty).
@@ -26,7 +28,7 @@ param(
     [Parameter(ParameterSetName = 'Uninstall')][switch]$Uninstall,
     [ValidateSet('CurrentUser', 'LocalMachine')][string]$Scope = 'CurrentUser',
     [ValidateSet('All', 'Thumb', 'Propsheet')][string]$Feature = 'All',
-    [string[]]$Extensions = @('apk'),
+    [string[]]$Extensions = @('apk', 'xapk', 'apks', 'apkm'),
     [string]$DllDir = ''
 )
 

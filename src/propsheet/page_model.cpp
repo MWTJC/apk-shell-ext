@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cwchar>
+#include <cwctype>
 
 namespace apksx {
 namespace {
@@ -92,6 +93,14 @@ uint32_t UintField(const json::Value* obj, const char* key) {
   return v == nullptr ? 0u : static_cast<uint32_t>(v->as_number(0.0));
 }
 
+// 分包可能超过 4 GB（含 obb 的容器），大小用 64 位
+uint64_t Uint64Field(const json::Value* obj, const char* key) {
+  const json::Value* v = Field(obj, key);
+  if (v == nullptr) return 0;
+  const double value = v->as_number(0.0);
+  return value <= 0.0 ? 0 : static_cast<uint64_t>(value);
+}
+
 std::vector<std::string> StringArray(const json::Value* obj, const char* key) {
   std::vector<std::string> out;
   const json::Value* v = Field(obj, key);
@@ -139,6 +148,7 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   const json::Value* icon = doc.Find("icon");
   const json::Value* comps = doc.Find("components");
   const json::Value* sig = doc.Find("signature");
+  const json::Value* container = doc.Find("container");
   const json::Value* diag = doc.Find("diagnostics");
 
   // ---------------------------------------------------------------- 头部
@@ -271,10 +281,62 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     }
   }
 
+  // ---------------------------------------------------------------- 分包（可折叠，M4a）
+  // 只有 .xapk/.apks/.apkm 这类多 APK 容器才有：base 之外的 config/feature 包列在这里。
+  if (container != nullptr && container->is_object()) {
+    std::vector<std::wstring> lines;
+    const json::Value* list = Field(container, "splits");
+    if (list != nullptr && list->type == json::Type::Array) {
+      for (const json::ValuePtr& item : list->items) {
+        const std::wstring name = StrField(item.get(), "name");
+        if (name.empty()) continue;
+        const uint64_t size = Uint64Field(item.get(), "size");
+        std::wstring kind = StrField(item.get(), "kind");
+        if (kind == L"base") {
+          kind = L"base";
+        } else if (kind == L"config") {
+          kind = L"配置";
+        } else {
+          kind = L"分包";
+        }
+        std::wstring line = L"[" + kind + L"] " + name;
+        if (size != 0) line += L"（" + FormatBytes(size) + L"）";
+        lines.push_back(line);
+      }
+    }
+    if (!lines.empty()) {
+      PageGroup splits;
+      wchar_t buf[64];
+      _snwprintf_s(buf, _TRUNCATE, L"分包 · %zu 项", lines.size());
+      splits.title = buf;
+      splits.collapsible = true;
+      for (const std::wstring& line : lines) AddRow(&splits, L"", line);
+      out->groups.push_back(std::move(splits));
+    }
+  }
+
   // ---------------------------------------------------------------- 文件与签名
   PageGroup files;
   files.title = L"文件与签名";
   {
+    // 容器类型放最前：.xapk/.apks/.apkm 时先让人知道"这不是普通 APK"
+    if (container != nullptr && container->is_object()) {
+      const std::wstring base = StrField(container, "base");
+      if (!base.empty()) AddRow(&files, L"内层 APK", base);
+      const uint32_t count = UintField(container, "apkCount");
+      const std::wstring kind = StrField(container, "kind");
+      if (!kind.empty()) {
+        std::wstring title = kind;
+        for (wchar_t& c : title) c = static_cast<wchar_t>(::towupper(c));
+        wchar_t buf[64];
+        if (count != 0) {
+          _snwprintf_s(buf, _TRUNCATE, L"%s（%u 个 APK）", title.c_str(), count);
+          AddRow(&files, L"安装包类型", buf);
+        } else {
+          AddRow(&files, L"安装包类型", title);
+        }
+      }
+    }
     const uint32_t size = UintField(file, "size");
     if (size != 0) AddRow(&files, L"大小", FormatBytes(size));
     const uint32_t mtime = UintField(file, "mtime");

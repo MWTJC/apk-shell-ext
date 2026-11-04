@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/common.h"
 #include "core/com_ptr.h"
@@ -31,5 +32,8 @@ std::shared_ptr<ByteSource> OpenStreamSource(IStream* stream, Error* err);
 // 在 parent 上开一个 [offset, offset+length) 的只读窗口（不复制数据）
 std::shared_ptr<ByteSource> SliceSource(const std::shared_ptr<ByteSource>& parent,
                                         uint64_t offset, uint64_t length);
+
+// 内存数据源：容器里的 base.apk 是 deflate 时只能先解压出来（不能开窗口）
+std::shared_ptr<ByteSource> MemorySource(std::vector<uint8_t> bytes);
 
 }  // namespace apksx

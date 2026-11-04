@@ -91,16 +91,13 @@ std::string DensityName(uint16_t density) {
   }
 }
 
-bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha256, ApkInfo* out,
-                              Error* err) {
-  (void)want_sha256;  // 哈希要按路径流式读，见 CollectApkInfo
+// 一个 APK（单包，或容器里的 base）的全部字段。
+// 调用方负责把正确的 ZIP 喂进来：单 .apk 就是文件本身，容器是 base.apk 的窗口/内存块。
+static bool ScanApkZip(ZipReader& zip, ApkInfo* out, Error* err) {
   if (out == nullptr) return false;
   *out = ApkInfo();
 
   const Deadline deadline(0);  // 总时限由 CLI 的 --timeout 负责
-  ZipReader zip;
-  if (!zip.OpenSource(std::move(source), err)) return false;
-  out->size = zip.file_size();
 
   // ---------------------------------------------------------------- 清单（只解析一次）
   const ZipEntry* manifest_entry = zip.Find(kManifestEntry);
@@ -313,6 +310,53 @@ bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha2
   }
 
   if (out->package.empty()) out->warnings.push_back("清单里没有 package 属性");
+  return true;
+}
+
+bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha256, ApkInfo* out,
+                              Error* err) {
+  (void)want_sha256;  // 哈希要按路径流式读，见 CollectApkInfo
+  if (out == nullptr) return false;
+
+  ZipReader outer;
+  if (!outer.OpenSource(std::move(source), err)) return false;
+
+  // 多 APK 容器（.xapk/.apks/.apkm）：先取出 base.apk 的数据源，再按普通 APK 解析
+  PackageOpen package;
+  if (!ResolvePackage(outer, &package, err)) return false;
+
+  if (package.kind == ContainerKind::kApk) {
+    if (!ScanApkZip(outer, out, err)) return false;
+  } else {
+    ZipReader base;
+    if (!base.OpenSource(package.apk, err)) {
+      if (err) err->set(L"容器里的 base.apk 打不开（中央目录损坏）");
+      return false;
+    }
+    if (!ScanApkZip(base, out, err)) return false;
+
+    out->container = package.kind;
+    out->base_entry = package.base_entry;
+    out->splits = package.splits;
+  }
+  out->size = outer.file_size();
+
+  // 图标兜底：base 里没有 launcher 图标时用容器根上的 icon.png
+  if (out->icon_source.empty() && !package.root_icon.empty()) {
+    const ZipEntry* entry = outer.Find(package.root_icon);
+    std::vector<uint8_t> bytes;
+    if (entry != nullptr && outer.Read(*entry, kMaxIconRead, &bytes, nullptr)) {
+      out->icon_source = package.root_icon;
+      out->icon_from_container = true;
+      PngSize(bytes, &out->icon_width, &out->icon_height);
+      for (auto it = out->warnings.begin(); it != out->warnings.end(); ++it) {
+        if (*it == "未找到 launcher 图标") {
+          out->warnings.erase(it);
+          break;
+        }
+      }
+    }
+  }
   return true;
 }
 

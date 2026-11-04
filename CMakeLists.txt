@@ -58,6 +58,7 @@ add_library(apksx_core STATIC
   src/core/arsc_stream.cpp
   src/core/apk_icon.cpp
   src/core/apk_info.cpp
+  src/core/package.cpp
   src/core/apk_signature.cpp
   src/core/json_lite.cpp
   src/core/wic_image.cpp
@@ -67,7 +68,7 @@ target_include_directories(apksx_core PUBLIC src)
 target_link_libraries(apksx_core PUBLIC apksx_miniz
   bcrypt crypt32 windowscodecs ole32 shlwapi)
 target_compile_definitions(apksx_core PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN
-                                               NOMINMAX APKSX_PARSER_VERSION="m1.0")
+                                               NOMINMAX APKSX_PARSER_VERSION="m4a")
 
 # ---------------------------------------------------------------------------
 # apkthumb.dll —— 唯一进入 explorer 的代码：IThumbnailProvider
@@ -88,7 +89,7 @@ endif()
 # ---------------------------------------------------------------------------
 # 属性页的行模型（JSON → 分组行）：单独成库，测试不需要拉起 COM/窗口
 # ---------------------------------------------------------------------------
-add_library(apksx_pagemodel STATIC src/propsheet/page_model.cpp)
+add_library(apksx_pagemodel STATIC src/propsheet/page_model.cpp src/propsheet/page_layout.cpp)
 target_link_libraries(apksx_pagemodel PUBLIC apksx_core)
 
 # ---------------------------------------------------------------------------

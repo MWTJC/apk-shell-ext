@@ -12,6 +12,7 @@
 #include "core/apk_icon.h"
 #include "core/byte_source.h"
 #include "core/log.h"
+#include "core/package.h"
 #include "core/thumb_cache.h"
 #include "core/wic_image.h"
 #include "core/zip_reader.h"
@@ -165,37 +166,27 @@ class ThumbProvider final : public IThumbnailProvider,
     return cached.CreateHBitmap(cx, phbmp, nullptr, nullptr, &err) ? S_OK : E_FAIL;
   }
 
-  // 已打开 ZIP 之后的所有工作：定位图标 → 读条目 → 解码 → 落缓存 → 出 HBITMAP
+  // 把图标条目读进内存 → 解码 → 落缓存 → 出 HBITMAP。
+  // 容器（.xapk/.apks/.apkm）由 ReadPackageIcon 负责取出 base.apk；
+  // base 里没有图标时它自己退到容器根上的 icon.png。
   HRESULT BuildFromZip(ZipReader& zip, const std::wstring& material, UINT cx, HBITMAP* phbmp,
                        const Deadline& deadline) {
     Error err;
 
-    IconLocation icon;
-    if (!apksx::LocateApkIconInZip(zip, &icon, nullptr, &err, &deadline)) {
+    apksx::PackageIcon icon;
+    if (!apksx::ReadPackageIcon(zip, &icon, &err, &deadline)) {
       apksx::DebugLogf(L"locate failed (%ls) key=%ls", err.message.c_str(), material.c_str());
       ThumbCache::StoreNegativeByMaterial(material);
       return E_FAIL;
     }
 
-    const ZipEntry* entry = zip.Find(icon.entry_path);
-    if (entry == nullptr) {
-      ThumbCache::StoreNegativeByMaterial(material);
-      return E_FAIL;
-    }
-
-    std::vector<uint8_t> bytes;
-    if (!zip.Read(*entry, apksx::kMaxIconRead, &bytes, &err)) {
-      apksx::DebugLogf(L"read icon failed (%ls): %hs", err.message.c_str(),
-                       icon.entry_path.c_str());
-      ThumbCache::StoreNegativeByMaterial(material);
-      return E_FAIL;
-    }
+    std::vector<uint8_t> bytes = std::move(icon.bytes);
 
     DecodedImage image;
     const double decode_start = deadline.elapsed_ms();
     if (!image.DecodeFromMemory(bytes, kMaxSourceDim, &err)) {
       apksx::DebugLogf(L"decode failed (%ls): %hs key=%ls", err.message.c_str(),
-                       icon.entry_path.c_str(), material.c_str());
+                       icon.source.c_str(), material.c_str());
       ThumbCache::StoreNegativeByMaterial(material);
       return E_FAIL;
     }
@@ -210,7 +201,7 @@ class ThumbProvider final : public IThumbnailProvider,
     }
 
     apksx::DebugLogf(L"built %.1fms (decode %.1fms) %ux%u %hs (%hs)", deadline.elapsed_ms(),
-                     decode_ms, cx, cx, icon.entry_path.c_str(), icon.note.c_str());
+                     decode_ms, cx, cx, icon.source.c_str(), icon.note.c_str());
     return S_OK;
   }
 

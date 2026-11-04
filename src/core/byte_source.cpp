@@ -1,6 +1,8 @@
 #include "core/byte_source.h"
 
 #include <algorithm>
+#include <cstring>
+#include <vector>
 
 namespace apksx {
 namespace {
@@ -87,6 +89,23 @@ class RegionSource final : public ByteSource {
   uint64_t length_;
 };
 
+// 整块内存。只给"必须解压才能随机读"的场景用（容器里 deflate 的 base.apk）。
+class BlobSource final : public ByteSource {
+ public:
+  explicit BlobSource(std::vector<uint8_t> bytes) : bytes_(std::move(bytes)) {}
+
+  uint64_t size() const override { return static_cast<uint64_t>(bytes_.size()); }
+
+  bool ReadAt(uint64_t offset, void* buffer, size_t length) override {
+    if (offset > bytes_.size() || length > bytes_.size() - offset) return false;
+    if (length > 0) std::memcpy(buffer, bytes_.data() + offset, length);
+    return true;
+  }
+
+ private:
+  std::vector<uint8_t> bytes_;
+};
+
 }  // namespace
 
 std::shared_ptr<ByteSource> OpenFileSource(const std::wstring& path, Error* err) {
@@ -134,6 +153,10 @@ std::shared_ptr<ByteSource> SliceSource(const std::shared_ptr<ByteSource>& paren
   if (offset > parent->size()) return nullptr;
   const uint64_t available = parent->size() - offset;
   return std::make_shared<RegionSource>(parent, offset, std::min(length, available));
+}
+
+std::shared_ptr<ByteSource> MemorySource(std::vector<uint8_t> bytes) {
+  return std::make_shared<BlobSource>(std::move(bytes));
 }
 
 }  // namespace apksx

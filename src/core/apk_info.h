@@ -10,6 +10,7 @@
 #include "core/byte_source.h"
 #include "core/apk_signature.h"
 #include "core/common.h"
+#include "core/package.h"
 
 namespace apksx {
 
@@ -56,6 +57,12 @@ struct ApkInfo {
 
   // 签名（APK Signing Block + META-INF 的 PKCS#7）
   SignatureInfo signature;
+
+  // 容器（M4a）：单 APK 时 container = kApk、splits 为空
+  ContainerKind container = ContainerKind::kApk;
+  std::string base_entry;        // xapk/apks/apkm 里 base 的条目名
+  std::vector<SplitApk> splits;  // 含 base
+  bool icon_from_container = false;  // 图标来自容器根 icon.png（base 里没有）
 
   // diagnostics
   std::vector<std::string> warnings;

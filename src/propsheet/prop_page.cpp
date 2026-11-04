@@ -34,6 +34,7 @@
 #include "core/wic_image.h"
 #include "core/zip_reader.h"
 #include "propsheet/page_list.h"
+#include "propsheet/page_layout.h"
 #include "propsheet/page_model.h"
 #include "propsheet/theme.h"
 #include "propsheet/worker_client.h"
@@ -305,51 +306,29 @@ void Relayout(HWND hwnd) {
   ::GetClientRect(hwnd, &client);
   const int width = client.right - client.left;
   const int height = client.bottom - client.top;
-  const int pad = state->theme.Scale(12);
-  const int icon_size = state->theme.Scale(32);
-  const int line_height = state->theme.Scale(18);
 
-  const int header_top = pad;
-  ::MoveWindow(state->icon_view, pad, header_top, icon_size, icon_size, TRUE);
-  const int text_left = pad + icon_size + state->theme.Scale(10);
-  const int text_width = std::max(0, width - text_left - pad);
-  ::MoveWindow(state->label_view, text_left, header_top, text_width, state->theme.Scale(20), TRUE);
-  ::MoveWindow(state->package_view, text_left, header_top + state->theme.Scale(20), text_width,
-               line_height, TRUE);
-  ::MoveWindow(state->version_view, text_left, header_top + state->theme.Scale(20) + line_height,
-               text_width, line_height, TRUE);
+  // 布局数学在 page_layout.cpp 里（纯函数，可按 DPI 单测），这里只搬矩形
+  const apksx::PageLayout layout = apksx::ComputePageLayout(
+      state->theme.dpi, width, height, ::IsWindowVisible(state->hash_button) != FALSE,
+      ::IsWindowVisible(state->retry_button) != FALSE);
+  const auto width_of = [](const RECT& rect) { return rect.right - rect.left; };
+  const auto place = [](HWND control, const RECT& rect) {
+    if (control == nullptr) return;
+    ::MoveWindow(control, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, TRUE);
+  };
 
-  const int header_bottom =
-      header_top + std::max(icon_size, state->theme.Scale(20) + line_height * 2);
-  ::MoveWindow(state->separator, pad, header_bottom, std::max(0, width - pad * 2), 1, TRUE);
+  place(state->icon_view, layout.icon);
+  place(state->label_view, layout.label);
+  place(state->package_view, layout.package);
+  place(state->version_view, layout.version);
+  place(state->separator, layout.separator);
+  place(state->copy_button, layout.copy_button);
+  place(state->hash_button, layout.hash_button);
+  place(state->retry_button, layout.retry_button);
+  place(state->status_view, layout.status);
+  place(state->list, layout.list);
 
-  const int footer_height = state->theme.Scale(34);
-  const int footer_top = height - footer_height;
-  const int button_height = state->theme.Scale(24);
-  const int button_top = footer_top + (footer_height - button_height) / 2;
-  int right = width - pad;
-  const int copy_width = state->theme.Scale(128);
-  ::MoveWindow(state->copy_button, right - copy_width, button_top, copy_width, button_height, TRUE);
-  right -= copy_width + state->theme.Scale(6);
-  const int hash_width = state->theme.Scale(112);
-  if (::IsWindowVisible(state->hash_button)) {
-    ::MoveWindow(state->hash_button, right - hash_width, button_top, hash_width, button_height, TRUE);
-    right -= hash_width + state->theme.Scale(6);
-  }
-  const int retry_width = state->theme.Scale(64);
-  if (::IsWindowVisible(state->retry_button)) {
-    ::MoveWindow(state->retry_button, right - retry_width, button_top, retry_width, button_height,
-                 TRUE);
-    right -= retry_width + state->theme.Scale(6);
-  }
-  ::MoveWindow(state->status_view, pad, footer_top,
-               std::max(0, right - pad - state->theme.Scale(8)), footer_height, TRUE);
-
-  const int list_top = header_bottom + state->theme.Scale(8);
-  const int list_bottom = footer_top - state->theme.Scale(6);
-  const int list_height = std::max(0, list_bottom - list_top);
-  ::MoveWindow(state->list, pad, list_top, std::max(0, width - pad * 2), list_height, TRUE);
-  apksx::ApplyListColumns(state->list, std::max(0, width - pad * 2), state->theme.dpi);
+  apksx::ApplyListColumns(state->list, width_of(layout.list), state->theme.dpi);
 }
 
 void RefreshView(HWND hwnd) {

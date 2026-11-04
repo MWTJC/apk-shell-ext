@@ -160,7 +160,7 @@ std::string RenderJson(const ApkInfo& info, bool pretty) {
   Json j(pretty);
   j.BeginObject();
   j.Uint("schema", 1);
-  j.Str("kind", "apk");
+  j.Str("kind", apksx::ContainerKindName(info.container));
 
   // ---- file
   j.Key("file");
@@ -185,6 +185,29 @@ std::string RenderJson(const ApkInfo& info, bool pretty) {
   j.StrArray("locales", info.locales);
   j.EndObject();
 
+  // ---- container（M4a：只有 .xapk/.apks/.apkm 这类多 APK 容器才有）
+  if (info.container != apksx::ContainerKind::kApk) {
+    j.Key("container");
+    j.BeginObject();
+    j.Str("kind", apksx::ContainerKindName(info.container));
+    j.Str("base", info.base_entry);
+    j.Uint("apkCount", info.splits.size());
+    if (!info.splits.empty()) {
+      j.Key("splits");
+      j.BeginArray();
+      for (const apksx::SplitApk& split : info.splits) {
+        j.BeginObject();
+        j.Str("name", split.name);
+        j.Uint("size", split.size);
+        j.Str("kind", split.kind);
+        if (split.is_base) j.Flag("base", true);
+        j.EndObject();
+      }
+      j.EndArray();
+    }
+    j.EndObject();
+  }
+
   // ---- icon
   if (!info.icon_source.empty()) {
     j.Key("icon");
@@ -195,6 +218,7 @@ std::string RenderJson(const ApkInfo& info, bool pretty) {
       j.Uint("height", info.icon_height);
     }
     j.Flag("adaptive", info.icon_adaptive);
+    if (info.icon_from_container) j.Flag("fromContainer", true);
     j.EndObject();
   }
 
@@ -274,6 +298,10 @@ std::string RenderText(const ApkInfo& info) {
     out += '\n';
   };
   line("path", info.path);
+  if (info.container != apksx::ContainerKind::kApk) {
+    line("container", std::string(apksx::ContainerKindName(info.container)) + " / base " +
+                          info.base_entry + " / " + std::to_string(info.splits.size()) + " apks");
+  }
   line("package", info.package);
   line("label", info.label);
   line("version", info.version_name + " (" + std::to_string(info.version_code) + ")");

@@ -13,6 +13,7 @@
 
 #include "core/common.h"
 #include "core/json_lite.h"
+#include "propsheet/page_layout.h"
 #include "propsheet/page_model.h"
 
 namespace {
@@ -70,6 +71,22 @@ const char kSample[] = R"json({
   "diagnostics": {"warnings": ["未找到 launcher 图标"], "elapsedMs": 12.5}
 })json";
 
+// .xapk 形状（M4a）：container 块 + splits
+const char kContainerSample[] = R"json({
+  "schema": 1,
+  "kind": "xapk",
+  "file": {"path": "D:\\x\\p.xapk", "size": 22131352, "mtime": 1793773177},
+  "app": {"package": "com.example.app", "label": "Example", "versionName": "1.0",
+          "versionCode": 7, "minSdk": 21, "targetSdk": 34},
+  "container": {"kind": "xapk", "base": "com.example.app.apk", "apkCount": 2,
+                "splits": [{"name": "com.example.app.apk", "size": 15812534, "kind": "base", "base": true},
+                           {"name": "config.armeabi_v7a.apk", "size": 6316540, "kind": "config"}]},
+  "icon": {"source": "res/mipmap-xxxhdpi/app_icon.png", "width": 192, "height": 192,
+           "adaptive": false},
+  "components": {"activities": 1},
+  "diagnostics": {"elapsedMs": 13.6}
+})json";
+
 void DumpModel(const apksx::PageModel& model) {
   std::wprintf(L"label: %ls\n", model.label.c_str());
   std::wprintf(L"package: %ls\n", model.package.c_str());
@@ -94,6 +111,127 @@ const apksx::PageGroup* FindGroupByPrefix(const apksx::PageModel& model, const w
     if (group.title.find(prefix) == 0) return &group;
   }
   return nullptr;
+}
+
+// ------------------------------------------------------------------ 布局 / DPI
+// M3 验收里"150%/200% 下不裁切"的可复现版本：
+// 布局是 (dpi, 客户区尺寸) 的纯函数，所以在没有 explorer、没有窗口的情况下也能断言。
+// 客户区按 **DIP** 取网格（对话框随 DPI 等比变大，物理像素也等比变大），
+// 覆盖 100% / 125% / 150% / 175% / 200% / 250% 六档缩放。
+struct LayoutStats {
+  int cases = 0;
+  int outside = 0;
+  int negative = 0;
+  int overlap = 0;
+  int header_overlap = 0;
+  int list_overlap = 0;
+  char first_failure[160] = {};
+};
+
+bool Inside(const RECT& rect, int width, int height) {
+  return rect.left >= 0 && rect.top >= 0 && rect.right <= width && rect.bottom <= height;
+}
+
+bool Negative(const RECT& rect) { return rect.right < rect.left || rect.bottom < rect.top; }
+
+// 零尺寸矩形（隐藏按钮）不算重叠
+bool Overlaps(const RECT& a, const RECT& b) {
+  if (a.right == a.left || a.bottom == a.top || b.right == b.left || b.bottom == b.top) return false;
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
+LayoutStats SweepLayouts() {
+  LayoutStats stats;
+  const int dpis[] = {96, 120, 144, 168, 192, 240};  // 100% / 125% / 150% / 175% / 200% / 250%
+  for (int dpi : dpis) {
+    for (int width_dip = 360; width_dip <= 900; width_dip += 20) {
+      for (int height_dip = 400; height_dip <= 1000; height_dip += 20) {
+        for (int variant = 0; variant < 4; ++variant) {
+          const bool show_hash = (variant & 1) != 0;
+          const bool show_retry = (variant & 2) != 0;
+          const int width = ::MulDiv(width_dip, dpi, 96);
+          const int height = ::MulDiv(height_dip, dpi, 96);
+          const apksx::PageLayout layout =
+              apksx::ComputePageLayout(dpi, width, height, show_hash, show_retry);
+          ++stats.cases;
+
+          const RECT rects[] = {layout.icon,       layout.label,      layout.package,
+                                layout.version,    layout.separator,  layout.list,
+                                layout.hash_button, layout.copy_button, layout.retry_button,
+                                layout.status};
+          for (const RECT& rect : rects) {
+            if (Negative(rect)) ++stats.negative;
+            if (!Inside(rect, width, height)) {
+              if (stats.outside == 0) {
+                _snprintf_s(stats.first_failure, sizeof(stats.first_failure), _TRUNCATE,
+                            "dpi=%d client=%dx%d variant=%d rect=%ld,%ld,%ld,%ld", dpi, width,
+                            height, variant, static_cast<long>(rect.left),
+                            static_cast<long>(rect.top), static_cast<long>(rect.right),
+                            static_cast<long>(rect.bottom));
+              }
+              ++stats.outside;
+            }
+          }
+
+          if (Overlaps(layout.copy_button, layout.hash_button) ||
+              Overlaps(layout.copy_button, layout.retry_button) ||
+              Overlaps(layout.hash_button, layout.retry_button) ||
+              Overlaps(layout.status, layout.copy_button) ||
+              Overlaps(layout.status, layout.hash_button) ||
+              Overlaps(layout.status, layout.retry_button)) {
+            ++stats.overlap;
+          }
+
+          // 头部三行文字不能压到图标
+          if (layout.label.left < layout.icon.right || layout.package.left < layout.icon.right ||
+              layout.version.left < layout.icon.right) {
+            ++stats.header_overlap;
+          }
+
+          // 列表不能和头部/底栏叠在一起
+          if (Overlaps(layout.list, layout.icon) || Overlaps(layout.list, layout.status)) {
+            ++stats.list_overlap;
+          }
+        }
+      }
+    }
+  }
+  return stats;
+}
+
+void RunLayoutSelfTest() {
+  std::printf("selftest: page layout / dpi\n");
+  const LayoutStats stats = SweepLayouts();
+  std::printf("  (swept %d layouts: dpi 96..240 x client 360..900 x 400..1000 DIP x 4 variants)\n",
+              stats.cases);
+  if (stats.outside != 0) std::printf("  first out-of-client: %s\n", stats.first_failure);
+  Check(stats.outside == 0, "所有控件都在客户区内（无裁切）");
+  Check(stats.negative == 0, "没有任何负宽高");
+  Check(stats.overlap == 0, "底栏按钮/状态文字互不重叠");
+  Check(stats.header_overlap == 0, "头部文字不压图标");
+  Check(stats.list_overlap == 0, "列表不与头部/底栏重叠");
+
+  // 100% 的黄金值：改动布局数学时这里会先炸，逼着人确认是有意改的
+  const apksx::PageLayout base = apksx::ComputePageLayout(96, 468, 600, true, false);
+  Check(base.icon.left == 12 && base.icon.top == 12 &&
+            base.icon.right - base.icon.left == 32 && base.icon.bottom - base.icon.top == 32,
+        "96 DPI 图标为 32px @ (12,12)");
+  Check(base.list.left == 12 && base.list.right == 456,
+        "96 DPI 列表左右各留 12px");
+  Check(base.copy_button.right - base.copy_button.left == 128 &&
+            base.hash_button.right - base.hash_button.left == 112,
+        "96 DPI 按钮宽度 128 / 112");
+  Check(base.button_height == 24 && base.footer_top == 600 - 34,
+        "96 DPI 底栏高 34px、按钮高 24px");
+
+  // 150% / 200%：几何必须是等比的（这也是"真实缩放下不会被裁"的前提）
+  const apksx::PageLayout at150 = apksx::ComputePageLayout(144, 468 * 3 / 2, 600 * 3 / 2, true, false);
+  const apksx::PageLayout at200 = apksx::ComputePageLayout(192, 468 * 2, 600 * 2, true, false);
+  Check(at150.icon.right - at150.icon.left == 48 && at200.icon.right - at200.icon.left == 64,
+        "150%/200% 图标按比例放大到 48px / 64px");
+  Check(at150.list.left == 18 && at200.list.left == 24, "150%/200% 内边距按比例放大");
+  Check(at200.list.right - at200.list.left == (base.list.right - base.list.left) * 2,
+        "200% 列表宽度是 100% 的两倍");
 }
 
 int RunSelfTest() {
@@ -163,6 +301,30 @@ int RunSelfTest() {
     Check(false, "minimal JSON parses");
   }
 
+  // ---- 容器（M4a）：xapk 的 container 块 → 「分包」分组 + 文件组两行
+  {
+    apksx::json::ValuePtr container_doc;
+    Check(apksx::json::Parse(kContainerSample, &container_doc, &err) && container_doc != nullptr,
+          "container JSON parses");
+    apksx::PageModel container_model;
+    Check(apksx::BuildPageModel(*container_doc, L"p.xapk", &container_model, &err),
+          "container model builds");
+    const apksx::PageGroup* splits = FindGroupByPrefix(container_model, L"分包 ·");
+    Check(splits != nullptr && splits->collapsible, "分包组可折叠");
+    Check(splits != nullptr && splits->rows.size() == 2, "分包组列出 base + config 两条");
+    Check(splits != nullptr && splits->rows[0].value.find(L"[base]") == 0,
+          "base 分包带 [base] 前缀");
+    Check(splits != nullptr && splits->rows[1].value.find(L"[配置]") == 0,
+          "config 分包带 [配置] 前缀");
+    Check(splits != nullptr && splits->rows[1].value.find(L"6.0 MB") != std::wstring::npos,
+          "分包行带大小");
+    const std::wstring* container_kind = FindValue(container_model, L"安装包类型");
+    Check(container_kind != nullptr && container_kind->find(L"XAPK") == 0,
+          "文件组有「安装包类型 = XAPK（2 个 APK）」");
+    const std::wstring* inner_apk = FindValue(container_model, L"内层 APK");
+    Check(inner_apk != nullptr && *inner_apk == L"com.example.app.apk", "文件组有内层 APK 名");
+  }
+
   // 坏 JSON：必须失败而不是"半个模型"
   apksx::json::ValuePtr broken;
   Check(!apksx::json::Parse("{\"a\": [1, 2,", &broken, &err), "truncated JSON rejected");
@@ -174,6 +336,8 @@ int RunSelfTest() {
     const bool ok = a != nullptr && apksx::Utf8ToWide(a->as_string(), &decoded);
     Check(ok && decoded == L"中文", "unicode escape decodes");
   }
+
+  RunLayoutSelfTest();
   return g_failures == 0 ? 0 : 1;
 }
 

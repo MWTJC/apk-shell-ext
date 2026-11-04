@@ -26,8 +26,10 @@
 #include "core/common.h"
 #include "core/com_ptr.h"
 #include "core/file_util.h"
+#include "core/package.h"
 #include "core/thumb_cache.h"
 #include "core/wic_image.h"
+#include "core/zip_reader.h"
 
 namespace {
 
@@ -258,12 +260,32 @@ int Probe(const std::wstring& file, bool json) {
   apksx::ManifestInfo info;
   apksx::Error err;
   apksx::IconLocation icon;
-  const bool manifest_ok = apksx::ReadApkManifest(file, &info, &err, &deadline);
-  const bool icon_ok = apksx::LocateApkIcon(file, &icon, &info, &err, &deadline);
+
+  // 容器（.xapk/.apks/.apkm）与单 APK 走同一条路：先取 base.apk 的数据源
+  apksx::PackageOpen package;
+  apksx::ZipReader zip;
+  const bool package_ok = apksx::OpenPackageFile(file, &package, &err);
+  if (package_ok && !zip.OpenSource(package.apk, &err)) {
+    if (err.empty()) err.set(L"base.apk 打不开");
+  }
+  const bool zip_ok = package_ok && zip.IsOpen();
+  const bool manifest_ok = zip_ok && apksx::ReadManifestFromZip(zip, &info, &err, &deadline);
+  bool icon_ok = manifest_ok && apksx::LocateIconInZip(zip, info, &icon, &err, &deadline);
+  // base 里没有图标时，真正会被画的是容器根上的 icon.png（与 provider 的行为一致）
+  if (package_ok && package.kind != apksx::ContainerKind::kApk && icon.entry_path.empty() &&
+      !package.root_icon.empty()) {
+    icon.entry_path = package.root_icon;
+    icon.note = "容器根上的 icon.png（base 里没有可用图标）";
+    icon_ok = true;
+  }
 
   if (json) {
     std::printf("{");
     PrintJsonString("file", file);
+    std::printf("\"container\":\"%s\",", apksx::ContainerKindName(package.kind));
+    if (!package.base_entry.empty()) {
+      std::printf("\"base\":\"%s\",", JsonEscape(package.base_entry).c_str());
+    }
     std::printf("\"manifestOk\":%s,", manifest_ok ? "true" : "false");
     std::printf("\"iconOk\":%s,", icon_ok ? "true" : "false");
     std::string pkg, label, ver, note;
@@ -286,6 +308,11 @@ int Probe(const std::wstring& file, bool json) {
     std::printf("}\n");
   } else {
     std::wprintf(L"%ls\n  清单: %ls\n", file.c_str(), manifest_ok ? L"ok" : err.message.c_str());
+    if (package_ok && package.kind != apksx::ContainerKind::kApk) {
+      std::wprintf(L"  容器: %hs  base=%hs  %zu 个 APK\n",
+                   apksx::ContainerKindName(package.kind), package.base_entry.c_str(),
+                   package.splits.size());
+    }
     std::wprintf(L"  package=%hs versionName=%hs versionCode=%u minSdk=%u targetSdk=%u\n",
                  info.package.c_str(), info.version_name.c_str(), info.version_code, info.min_sdk,
                  info.target_sdk);
