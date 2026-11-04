@@ -4,6 +4,7 @@
 #include <cctype>
 
 #include "core/apk_icon.h"
+#include "core/hap.h"
 #include "core/json_lite.h"
 #include "core/zip_reader.h"
 
@@ -110,6 +111,7 @@ const char* ContainerKindName(ContainerKind kind) {
     case ContainerKind::kApks: return "apks";
     case ContainerKind::kApkm: return "apkm";
     case ContainerKind::kSplits: return "splits";
+    case ContainerKind::kHap: return "hap";
   }
   return "unknown";
 }
@@ -188,6 +190,25 @@ bool OpenPackageFile(const std::wstring& path, PackageOpen* out, Error* err) {
 bool ReadPackageIcon(const ZipReader& outer, PackageIcon* out, Error* err, const Deadline* deadline) {
   if (out == nullptr) return false;
   *out = PackageIcon();
+
+  // 鸿蒙 HAP：module.json + $media: 启发式（不走 APK 的清单/arsc 路径）
+  if (LooksLikeHap(outer)) {
+    HapInfo hap;
+    HapIcon hap_icon;
+    Error hap_err;
+    if (!ReadHapManifest(outer, &hap, &hap_err)) {
+      if (err) err->set(hap_err.empty() ? L"HAP 清单读不出来" : hap_err.message);
+      return false;
+    }
+    if (!ReadHapIcon(outer, hap, &hap_icon, &hap_err)) {
+      if (err) err->set(hap_err.empty() ? L"HAP 里没有可用图标" : hap_err.message);
+      return false;
+    }
+    out->bytes = std::move(hap_icon.bytes);
+    out->source = hap_icon.path;
+    out->note = hap_icon.note;
+    return true;
+  }
 
   PackageOpen package;
   if (!ResolvePackage(outer, &package, err)) return false;

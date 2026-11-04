@@ -186,7 +186,8 @@ std::string RenderJson(const ApkInfo& info, bool pretty) {
   j.EndObject();
 
   // ---- container（M4a：只有 .xapk/.apks/.apkm 这类多 APK 容器才有）
-  if (info.container != apksx::ContainerKind::kApk) {
+  if (info.container != apksx::ContainerKind::kApk &&
+      info.container != apksx::ContainerKind::kHap) {
     j.Key("container");
     j.BeginObject();
     j.Str("kind", apksx::ContainerKindName(info.container));
@@ -205,6 +206,24 @@ std::string RenderJson(const ApkInfo& info, bool pretty) {
       }
       j.EndArray();
     }
+    j.EndObject();
+  }
+
+  // ---- hap（M4d：只有鸿蒙 .hap 才有）
+  if (info.container == apksx::ContainerKind::kHap) {
+    const apksx::HapInfo& hap = info.hap;
+    j.Key("hap");
+    j.BeginObject();
+    if (!hap.module_name.empty()) j.Str("module", hap.module_name);
+    if (!hap.module_type.empty()) j.Str("type", hap.module_type);
+    if (!hap.main_element.empty()) j.Str("mainAbility", hap.main_element);
+    if (hap.min_api != 0) j.Uint("minAPI", hap.min_api);
+    if (hap.target_api != 0) j.Uint("targetAPI", hap.target_api);
+    if (!hap.compile_sdk.empty()) j.Str("compileSdk", hap.compile_sdk);
+    j.StrArray("deviceTypes", hap.device_types);
+    j.Uint("abilities", hap.abilities);
+    if (hap.extension_abilities != 0) j.Uint("extensionAbilities", hap.extension_abilities);
+    if (!hap.label_ref.empty()) j.Str("labelRef", hap.label_ref);
     j.EndObject();
   }
 
@@ -298,7 +317,14 @@ std::string RenderText(const ApkInfo& info) {
     out += '\n';
   };
   line("path", info.path);
-  if (info.container != apksx::ContainerKind::kApk) {
+  if (info.container == apksx::ContainerKind::kHap) {
+    line("hap", info.hap.module_name + " (" + info.hap.module_type + ") / minAPI " +
+                   std::to_string(info.hap.min_api) + " / targetAPI " +
+                   std::to_string(info.hap.target_api) + " / " +
+                   std::to_string(info.hap.abilities) + " abilities");
+  }
+  if (info.container != apksx::ContainerKind::kApk &&
+      info.container != apksx::ContainerKind::kHap) {
     line("container", std::string(apksx::ContainerKindName(info.container)) + " / base " +
                           info.base_entry + " / " + std::to_string(info.splits.size()) + " apks");
   }

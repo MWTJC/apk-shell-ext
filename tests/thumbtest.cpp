@@ -26,6 +26,7 @@
 #include "core/common.h"
 #include "core/com_ptr.h"
 #include "core/file_util.h"
+#include "core/hap.h"
 #include "core/package.h"
 #include "core/thumb_cache.h"
 #include "core/wic_image.h"
@@ -261,28 +262,63 @@ int Probe(const std::wstring& file, bool json) {
   apksx::Error err;
   apksx::IconLocation icon;
 
-  // 容器（.xapk/.apks/.apkm）与单 APK 走同一条路：先取 base.apk 的数据源
+  // 打开文件 → 判定 am I HAP / 多 APK 容器 / 普通 APK（与 provider 同一套代码）
   apksx::PackageOpen package;
-  apksx::ZipReader zip;
-  const bool package_ok = apksx::OpenPackageFile(file, &package, &err);
-  if (package_ok && !zip.OpenSource(package.apk, &err)) {
-    if (err.empty()) err.set(L"base.apk 打不开");
+  apksx::HapInfo hap;
+  apksx::ZipReader outer;
+  bool zip_ok = false;
+  if (auto source = apksx::OpenFileSource(file, &err)) {
+    zip_ok = outer.OpenSource(source, &err);
   }
-  const bool zip_ok = package_ok && zip.IsOpen();
-  const bool manifest_ok = zip_ok && apksx::ReadManifestFromZip(zip, &info, &err, &deadline);
-  bool icon_ok = manifest_ok && apksx::LocateIconInZip(zip, info, &icon, &err, &deadline);
-  // base 里没有图标时，真正会被画的是容器根上的 icon.png（与 provider 的行为一致）
-  if (package_ok && package.kind != apksx::ContainerKind::kApk && icon.entry_path.empty() &&
-      !package.root_icon.empty()) {
-    icon.entry_path = package.root_icon;
-    icon.note = "容器根上的 icon.png（base 里没有可用图标）";
-    icon_ok = true;
+  const bool is_hap = zip_ok && apksx::LooksLikeHap(outer);
+  apksx::ZipReader base;
+  bool package_ok = zip_ok;
+  if (zip_ok && !is_hap) {
+    package_ok = apksx::ResolvePackage(outer, &package, &err);
+  }
+
+  bool manifest_ok = false;
+  bool icon_ok = false;
+  const apksx::ZipReader* apk_zip = &outer;
+
+  if (is_hap) {
+    manifest_ok = apksx::ReadHapManifest(outer, &hap, &err);
+    if (manifest_ok) {
+      info.package = hap.bundle_name;
+      info.label = hap.label;
+      info.version_name = hap.version_name;
+      info.version_code = hap.version_code;
+      info.min_sdk = hap.min_api;
+      info.target_sdk = hap.target_api;
+      info.has_icon = true;
+      apksx::HapIcon hap_icon;
+      apksx::Error icon_error;
+      if (apksx::ReadHapIcon(outer, hap, &hap_icon, &icon_error)) {
+        icon.entry_path = hap_icon.path;
+        icon.note = hap_icon.note;
+        icon_ok = true;
+      }
+    }
+  } else if (package_ok && package.kind != apksx::ContainerKind::kApk) {
+    if (base.OpenSource(package.apk, &err)) apk_zip = &base;
+  }
+
+  if (!is_hap) {
+    manifest_ok = apk_zip->IsOpen() && apksx::ReadManifestFromZip(*apk_zip, &info, &err, &deadline);
+    icon_ok = manifest_ok && apksx::LocateIconInZip(*apk_zip, info, &icon, &err, &deadline);
+    // base 里没有图标时，真正会被画的是容器根上的 icon.png（与 provider 的行为一致）
+    if (package_ok && package.kind != apksx::ContainerKind::kApk && icon.entry_path.empty() &&
+        !package.root_icon.empty()) {
+      icon.entry_path = package.root_icon;
+      icon.note = "容器根上的 icon.png（base 里没有可用图标）";
+      icon_ok = true;
+    }
   }
 
   if (json) {
     std::printf("{");
     PrintJsonString("file", file);
-    std::printf("\"container\":\"%s\",", apksx::ContainerKindName(package.kind));
+    std::printf("\"container\":\"%s\",", is_hap ? "hap" : apksx::ContainerKindName(package.kind));
     if (!package.base_entry.empty()) {
       std::printf("\"base\":\"%s\",", JsonEscape(package.base_entry).c_str());
     }
@@ -308,7 +344,10 @@ int Probe(const std::wstring& file, bool json) {
     std::printf("}\n");
   } else {
     std::wprintf(L"%ls\n  清单: %ls\n", file.c_str(), manifest_ok ? L"ok" : err.message.c_str());
-    if (package_ok && package.kind != apksx::ContainerKind::kApk) {
+    if (is_hap) {
+      std::wprintf(L"  container: hap  module=%hs  abilities=%u  minAPI=%u\n",
+                   hap.module_name.c_str(), hap.abilities, hap.min_api);
+    } else if (package_ok && package.kind != apksx::ContainerKind::kApk) {
       std::wprintf(L"  容器: %hs  base=%hs  %zu 个 APK\n",
                    apksx::ContainerKindName(package.kind), package.base_entry.c_str(),
                    package.splits.size());

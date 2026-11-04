@@ -313,6 +313,46 @@ static bool ScanApkZip(ZipReader& zip, ApkInfo* out, Error* err) {
   return true;
 }
 
+// 鸿蒙 HAP：module.json（JSON）+ $media: 图标。字段语义见 docs/formats.md §5。
+static bool ScanHapZip(const ZipReader& zip, ApkInfo* out, Error* err) {
+  HapInfo hap;
+  if (!ReadHapManifest(zip, &hap, err)) return false;
+
+  out->container = ContainerKind::kHap;
+  out->hap = hap;
+  out->package = hap.bundle_name;
+  out->label = hap.label;
+  out->version_name = hap.version_name;
+  out->version_code = hap.version_code;
+  out->components.activities = hap.abilities;  // Ability；ExtensionAbility 在 hap 块里
+  out->permissions = hap.permissions;
+
+  // libs/<abi>/*.so：HAP 的原生库布局
+  std::set<std::string> abis;
+  for (const ZipEntry& entry : zip.entries()) {
+    if (entry.name.compare(0, 5, "libs/") != 0) continue;
+    const size_t slash = entry.name.find('/', 5);
+    if (slash == std::string::npos) continue;
+    abis.insert(entry.name.substr(5, slash - 5));
+  }
+  out->abis.assign(abis.begin(), abis.end());
+
+  HapIcon icon;
+  Error icon_error;
+  if (ReadHapIcon(zip, hap, &icon, &icon_error)) {
+    out->icon_source = icon.path;
+    PngSize(icon.bytes, &out->icon_width, &out->icon_height);
+  } else {
+    out->warnings.push_back("未找到可用图标");
+  }
+
+  if (out->label.empty() && !hap.label_ref.empty()) {
+    out->warnings.push_back("应用名是资源引用，v1 不解析 resources.index（属性页回落文件名）");
+  }
+  out->warnings.push_back("HAP 签名块未解析（v1）");
+  return true;
+}
+
 bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha256, ApkInfo* out,
                               Error* err) {
   (void)want_sha256;  // 哈希要按路径流式读，见 CollectApkInfo
@@ -320,6 +360,13 @@ bool CollectApkInfoFromSource(std::shared_ptr<ByteSource> source, bool want_sha2
 
   ZipReader outer;
   if (!outer.OpenSource(std::move(source), err)) return false;
+
+  // 鸿蒙 HAP：根上是 module.json（不是 AndroidManifest.xml）
+  if (LooksLikeHap(outer)) {
+    if (!ScanHapZip(outer, out, err)) return false;
+    out->size = outer.file_size();
+    return true;
+  }
 
   // 多 APK 容器（.xapk/.apks/.apkm）：先取出 base.apk 的数据源，再按普通 APK 解析
   PackageOpen package;

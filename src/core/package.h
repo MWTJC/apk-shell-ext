@@ -28,6 +28,7 @@ enum class ContainerKind {
   kApks,     // bundletool：toc.pb
   kApkm,     // APKMirror：info.json
   kSplits,   // 没有元数据的裸分包集合
+  kHap,      // 鸿蒙 HAP：module.json
 };
 
 // "apk" / "xapk" / "apks" / "apkm" / "splits"（写进 JSON 与属性页）

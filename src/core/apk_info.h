@@ -10,6 +10,7 @@
 #include "core/byte_source.h"
 #include "core/apk_signature.h"
 #include "core/common.h"
+#include "core/hap.h"
 #include "core/package.h"
 
 namespace apksx {
@@ -63,6 +64,9 @@ struct ApkInfo {
   std::string base_entry;        // xapk/apks/apkm 里 base 的条目名
   std::vector<SplitApk> splits;  // 含 base
   bool icon_from_container = false;  // 图标来自容器根 icon.png（base 里没有）
+
+  // 鸿蒙 HAP（M4d）：container = kHap 时有效
+  HapInfo hap;
 
   // diagnostics
   std::vector<std::string> warnings;

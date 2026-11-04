@@ -149,6 +149,7 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   const json::Value* comps = doc.Find("components");
   const json::Value* sig = doc.Find("signature");
   const json::Value* container = doc.Find("container");
+  const json::Value* hap = doc.Find("hap");
   const json::Value* diag = doc.Find("diagnostics");
 
   // ---------------------------------------------------------------- 头部
@@ -198,6 +199,38 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   PageGroup tech;
   tech.title = L"技术";
   {
+    // 鸿蒙 HAP（M4d）：模块/API/编译 SDK/设备类型取代 APK 那套 SDK 语义
+    if (hap != nullptr && hap->is_object()) {
+      const std::wstring module = StrField(hap, "module");
+      const std::wstring type = StrField(hap, "type");
+      if (!module.empty()) {
+        AddRow(&tech, L"模块", type.empty() ? module : module + L"（" + type + L"）");
+      }
+      const std::wstring main_ability = StrField(hap, "mainAbility");
+      if (!main_ability.empty()) AddRow(&tech, L"主 Ability", main_ability);
+      const uint32_t min_api = UintField(hap, "minAPI");
+      const uint32_t target_api = UintField(hap, "targetAPI");
+      if (min_api != 0 || target_api != 0) {
+        wchar_t buf[80];
+        _snwprintf_s(buf, _TRUNCATE, L"min %u / target %u", min_api, target_api);
+        AddRow(&tech, L"API 版本", buf);
+      }
+      const std::wstring compile_sdk = StrField(hap, "compileSdk");
+      if (!compile_sdk.empty()) AddRow(&tech, L"编译 SDK", compile_sdk);
+      const std::vector<std::string> devices = StringArray(hap, "deviceTypes");
+      if (!devices.empty()) AddRow(&tech, L"设备类型", JoinStrings(devices, L", ", 8));
+      const uint32_t abilities = UintField(hap, "abilities");
+      const uint32_t extensions = UintField(hap, "extensionAbilities");
+      if (abilities + extensions > 0) {
+        wchar_t buf[64];
+        if (extensions == 0) {
+          _snwprintf_s(buf, _TRUNCATE, L"Ability %u", abilities);
+        } else {
+          _snwprintf_s(buf, _TRUNCATE, L"Ability %u · Extension %u", abilities, extensions);
+        }
+        AddRow(&tech, L"组件", buf);
+      }
+    }
     const std::vector<std::string> abis = StringArray(app, "abis");
     if (!abis.empty()) AddRow(&tech, L"ABI", JoinStrings(abis, L", ", 6));
     const std::vector<std::string> densities = StringArray(app, "densities");
@@ -208,7 +241,8 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     const uint32_t services = UintField(comps, "services");
     const uint32_t receivers = UintField(comps, "receivers");
     const uint32_t providers = UintField(comps, "providers");
-    if (activities + services + receivers + providers > 0) {
+    const bool is_hap = hap != nullptr && hap->is_object();
+    if (!is_hap && activities + services + receivers + providers > 0) {
       wchar_t buf[128];
       _snwprintf_s(buf, _TRUNCATE, L"活动 %u · 服务 %u · 广播 %u · 提供者 %u", activities, services,
                    receivers, providers);
@@ -319,7 +353,14 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   PageGroup files;
   files.title = L"文件与签名";
   {
-    // 容器类型放最前：.xapk/.apks/.apkm 时先让人知道"这不是普通 APK"
+    // 容器类型放最前：.xapk/.apks/.apkm/.hap 时先让人知道"这不是普通 APK"
+    if (hap != nullptr && hap->is_object()) {
+      AddRow(&files, L"安装包类型", L"HAP（鸿蒙）");
+      const std::wstring label_ref = StrField(hap, "labelRef");
+      if (!label_ref.empty()) {
+        AddRow(&files, L"名称引用", label_ref + L"（v1 不解析 resources.index）");
+      }
+    }
     if (container != nullptr && container->is_object()) {
       const std::wstring base = StrField(container, "base");
       if (!base.empty()) AddRow(&files, L"内层 APK", base);
@@ -350,8 +391,12 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     }
   }
   {
+    const bool is_hap = hap != nullptr && hap->is_object();
     if (sig == nullptr) {
-      AddRow(&files, L"签名", L"未发现签名（可能未签名或被重打包）");
+      // HAP 的签名是鸿蒙自己的块（不是 APK Signing Block），v1 没解析：
+      // 不能说"可能未签名"——那是假的，只能说没解析。
+      AddRow(&files, L"签名", is_hap ? L"未解析（HAP 签名块 v1 不做）"
+                                     : L"未发现签名（可能未签名或被重打包）");
     } else {
       const std::vector<std::string> schemes = StringArray(sig, "scheme");
       if (!schemes.empty()) AddRow(&files, L"签名", JoinStrings(schemes, L", ", 8));

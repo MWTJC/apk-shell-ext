@@ -28,7 +28,7 @@ param(
     [Parameter(ParameterSetName = 'Uninstall')][switch]$Uninstall,
     [ValidateSet('CurrentUser', 'LocalMachine')][string]$Scope = 'CurrentUser',
     [ValidateSet('All', 'Thumb', 'Propsheet')][string]$Feature = 'All',
-    [string[]]$Extensions = @('apk', 'xapk', 'apks', 'apkm'),
+    [string[]]$Extensions = @('apk', 'xapk', 'apks', 'apkm', 'hap'),
     [string]$DllDir = ''
 )
 

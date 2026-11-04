@@ -59,6 +59,7 @@ add_library(apksx_core STATIC
   src/core/apk_icon.cpp
   src/core/apk_info.cpp
   src/core/package.cpp
+  src/core/hap.cpp
   src/core/apk_signature.cpp
   src/core/json_lite.cpp
   src/core/wic_image.cpp
