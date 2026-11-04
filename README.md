@@ -1,6 +1,10 @@
-# apk-shell-ext
+<p align="center">
+  <img src="docs/evidence/logo.png" alt="apk-shell-ext" width="128">
+</p>
 
-让 Windows 资源管理器**认出你手机安装包长什么样**。
+<h1 align="center">apk-shell-ext</h1>
+
+<p align="center">让 Windows 资源管理器<strong>认出你手机安装包长什么样</strong>。</p>
 
 装了它以后：
 
@@ -8,14 +12,14 @@
 - **小图标 / 列表 / 详细信息**视图里是三枚专门画的格式图标（APK 绿单页、XAPK 绿双页、HAP 红单页），一眼分得清；
 - 右键 → 属性，多出一页 **「安装包信息」**：包名、应用名、版本、SDK、ABI、屏幕密度、语言、权限、签名摘要、SHA-256——全部离线解析，不联网。
 
-> **占位：演示动图**（GIF：在资源管理器里滚动一个全是 apk 的文件夹，大图标逐个出图）
-> 把文件放到 `docs/evidence/demo-thumbnails.gif` 后，把这两行换成 `![缩略图](docs/evidence/demo-thumbnails.gif)`
+![缩略图](docs/evidence/demo-thumbnails.gif)
 
-> **占位：属性页截图**（PNG：右键 → 属性 → 安装包信息，中英各一张可选）
-> 放到 `docs/evidence/demo-propsheet.png` 后换成 `![属性页](docs/evidence/demo-propsheet.png)`
+![属性页](docs/evidence/demo-propsheet.png)
+![属性页速度](docs/evidence/demo-propsheet-speed.gif)
 
-> **占位：小图标对比图**（PNG：同一文件夹里 apk / xapk / hap 三枚格式图标并排）
-> 放到 `docs/evidence/demo-icons.png` 后换成 `![格式图标](docs/evidence/demo-icons.png)`
+![格式图标](docs/evidence/demo-icons.png)
+
+> 上述动图均由[GIF Node Studio](https://github.com/MWTJC/gif_node_studio)导出
 
 ## 安装
 
