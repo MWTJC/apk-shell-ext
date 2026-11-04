@@ -109,10 +109,30 @@ SHA-256（apk-shell-ext-setup-x.y.z.exe）：
 
 ## 4. 仓库地址
 
-README 里的下载链接写的是 `https://github.com/mwtjc/apk-shell-ext/releases`。
-如果仓库最终不在这个地址，改 README 顶部那一处链接即可（没有别处引用）。
+仓库已公开：**https://github.com/MWTJC/apk-shell-ext**（默认分支 `main`）。
+README 里的下载链接写的是 `https://github.com/mwtjc/apk-shell-ext/releases`——大小写不敏感，能用；
+若要改成一致，只改 README 顶部那一处（没有别处引用）。
 
-## 5. 以后什么时候值得上 CI
+首个 release：`v1.0.0`（2026-11-05），产物 `apk-shell-ext-setup-1.0.0.exe`，2,176,005 字节。
+
+## 5. 从命令行发版时的坑
+
+`gh` 能用不代表一路顺，这三条都是实测踩过的：
+
+- **`git push` 中途 `send-pack: unexpected disconnect while reading sideband packet`**：
+  多半是 HTTP/2 被代理/中间设备打断。`git config http.version HTTP/1.1` 后重推即成功
+  （必要时再加 `http.postBuffer`）。只影响本仓库，不写进全局配置。
+- **`gh` 报 `failed to run git: fork/exec …Access is denied`**：它按 PATH 找 `git`，
+  拿到别的 `git`（比如某个打包环境自带的）就会失败。把系统 Git 的目录前置即可：
+  `set PATH=C:\Program Files\Git\cmd;%PATH%`。
+- **`gh` 直连 API 报 `TLS handshake timeout` 而 `curl` 正常**：给 `gh` 加 `https_proxy`
+  环境变量；`git push` 同理（`http.proxy` 或环境变量）。
+
+发布后**必须回读**：`gh release view <tag> --json assets` 看 `state=uploaded`，
+再把产物下载回来比对 SHA-256——"命令返回 0"不等于"字节对得上"。本次实测下载件与本地产物
+哈希一致（`A2095345…66AD0C`）。
+
+## 6. 以后什么时候值得上 CI
 
 - 需要**代码签名**（证书在云端，构建机不应存私钥）；
 - 需要**多机/多版本 Windows** 的回归（现在只有一台真机跑验收）；

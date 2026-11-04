@@ -1488,3 +1488,48 @@ si.wShowWindow = SW_HIDE;      // 与 CREATE_NO_WINDOW 叠加，防"闪一下"
 2. `.ico` 作为 `UninstallDisplayIcon` 在真实整机安装上已由用户目视确认，但没有再跑 `ExtractIconEx` 断言。
 3. 若想让"选择一个应用"少出现，可以考虑注册 ProgID / `OpenWithProgids`；当前按
    [architecture.md §4](architecture.md) 的约定**不碰文件关联**，不做。
+
+## 26. R-0018 记录（公开发布：仓库 + 首个 release，2026-11-05）
+
+### 环境
+
+与 §0 一致。发布机需要走本机代理才能访问 `api.github.com`（`gh` 直连 `TLS handshake timeout`，
+`curl` 直连正常）；`gh` 已登录 `MWTJC`，scopes `repo, gist, read:org`，git 走 HTTPS。
+
+### 做了什么
+
+```bat
+git branch -M main
+gh repo create MWTJC/apk-shell-ext --public --description "..."      :: 空仓先建，再手动 push
+git remote add origin https://github.com/MWTJC/apk-shell-ext.git
+git push -u origin main
+git tag -a v1.0.0 -m "v1.0.0" && git push origin v1.0.0
+gh release create v1.0.0 out/dist/apk-shell-ext-setup-1.0.0.exe --title "v1.0.0" --notes-file notes.md
+```
+
+踩到两个坑，已写进 [release.md §5](release.md)：
+
+1. `git push` 报 `send-pack: unexpected disconnect while reading sideband packet` →
+   `git config http.version HTTP/1.1` 后一次成功（代理打断 HTTP/2）。
+2. `gh` 报 `failed to run git: …Access is denied` → 它按 PATH 拿到了非系统 Git，
+   把 `C:\Program Files\Git\cmd` 前置后正常。
+
+### 验证（全部为回读，不是"命令返回 0"）
+
+| 断言 | 命令 | 结果 |
+| --- | --- | --- |
+| 远端收到全部历史 | `git ls-remote origin` | `refs/heads/main = a47ba5f`、`refs/tags/v1.0.0` |
+| 仓库状态 | `gh repo view --json visibility,defaultBranchRef,repositoryTopics` | `PUBLIC`、`main`、7 个 topics |
+| release 已发布且非草稿 | `gh release view v1.0.0 --json isDraft,assets` | `isDraft=false`，asset `state=uploaded`、`size=2176005` |
+| **产物字节一致** | `gh release download` 后 `Get-FileHash -Algorithm SHA256` | `A2095345…66AD0C`，与本地产物**相同** |
+| README 渲染 | 浏览器打开仓库页 | logo/标题/一句话居中；4 张演示图 `naturalWidth` 均非 0（256 / 664 / 466 / 809 / 387） |
+| release 页 | 浏览器打开 `releases/tag/v1.0.0` | "Latest" 标记、notes 正常、Assets 3（2 个源码包 + setup.exe） |
+
+### 未验证 / 注意
+
+1. 公开的安装包**未签名**（R-0014 起就如此），首次下载会触发 SmartScreen"未知发布者"——
+   已写进 release notes 的「已知问题」。
+2. 发布前对**全历史**做过一次敏感串扫描（私钥头、`ghp_/gho_/ghs_/github_pat_`、`AKIA`、`xox*-`）：0 命中。
+   历史里最大的 blob 是 `tests/fixtures/src/f_bigarsc_real/res/values-zh-rCN/strings.xml`（14 MB 夹具源码，
+   造大 arsc 用），没有二进制/真实样本入库。
+3. 没有 GitHub Actions，也没有分支保护；`main` 允许直接推送。

@@ -145,8 +145,8 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
 
 ## 9. 接力说明（下一会话从这里开始）
 
-当前状态一句话：**M0–M5 收口**，`apk-shell-ext-setup-1.0.0.exe` 可装可用、装/卸零残留已验证；
-剩下的都是"锦上添花 + 补测"，没有阻塞项。
+当前状态一句话：**M0–M5 收口并已公开发布**——仓库 https://github.com/MWTJC/apk-shell-ext
+（public，`main`），首个 release `v1.0.0` 的安装包已上传；可装可用、装/卸零残留已验证，剩下的都是"锦上添花 + 补测"。
 
 - **构建**：`tools\build.cmd Release`（MSVC 自动发现，见 §2）→ `out\x64\`。
 - **打包**：`tools\pack.cmd`（会先跑 `sync-version.ps1`，再找 ISCC）→ `out\dist\`。
