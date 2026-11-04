@@ -224,6 +224,7 @@ std::string RenderJson(const ApkInfo& info, bool pretty) {
     j.Uint("abilities", hap.abilities);
     if (hap.extension_abilities != 0) j.Uint("extensionAbilities", hap.extension_abilities);
     if (!hap.label_ref.empty()) j.Str("labelRef", hap.label_ref);
+    if (!hap.app_label_ref.empty()) j.Str("appLabelRef", hap.app_label_ref);
     j.EndObject();
   }
 

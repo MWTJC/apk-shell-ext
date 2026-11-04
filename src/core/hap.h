@@ -24,8 +24,10 @@ struct HapInfo {
   std::string version_name;
   uint32_t version_code = 0;
 
-  std::string label;      // 只有清单里写字面量时才填
-  std::string label_ref;  // 例如 "$string:app_name"（v1 不解，只如实报出）
+  std::string label;      // 字面量，或从 resources.index 解出来的真名
+  std::string label_ref;  // 实际用来解的那条引用（含 $string: 前缀）
+  uint32_t label_id = 0;  // 与 label_ref 对应的 labelId
+  std::string app_label_ref;  // app.label 的引用（诊断用；桌面显示的是 ability 的 label）
 
   uint32_t min_api = 0;      // app.minAPIVersion（HarmonyOS 的 API 号，如 60000020）
   uint32_t target_api = 0;   // app.targetAPIVersion
@@ -58,5 +60,10 @@ struct HapIcon {
 };
 
 bool ReadHapIcon(const ZipReader& zip, const HapInfo& info, HapIcon* out, Error* err);
+
+// 从 resources.index（RestoolV2）里取一个字符串资源的默认配置值。
+// 只做属性页需要的那一件事：$string:name → 真名。结构见 restool 的 resource_table.h。
+bool ResolveHapString(const std::vector<uint8_t>& index, uint32_t res_id,
+                      const std::string& res_name, std::string* out);
 
 }  // namespace apksx

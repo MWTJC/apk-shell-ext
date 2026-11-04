@@ -347,9 +347,9 @@ static bool ScanHapZip(const ZipReader& zip, ApkInfo* out, Error* err) {
   }
 
   if (out->label.empty() && !hap.label_ref.empty()) {
-    out->warnings.push_back("应用名是资源引用，v1 不解析 resources.index（属性页回落文件名）");
+    out->warnings.push_back("应用名未解析（resources.index 里没有 " + hap.label_ref + "）");
   }
-  out->warnings.push_back("HAP 签名块未解析（v1）");
+  // 签名：页面在「签名」行直接写"未实现"，这里不再重复一条警告
   return true;
 }
 

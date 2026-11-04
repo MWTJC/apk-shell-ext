@@ -356,10 +356,6 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     // 容器类型放最前：.xapk/.apks/.apkm/.hap 时先让人知道"这不是普通 APK"
     if (hap != nullptr && hap->is_object()) {
       AddRow(&files, L"安装包类型", L"HAP（鸿蒙）");
-      const std::wstring label_ref = StrField(hap, "labelRef");
-      if (!label_ref.empty()) {
-        AddRow(&files, L"名称引用", label_ref + L"（v1 不解析 resources.index）");
-      }
     }
     if (container != nullptr && container->is_object()) {
       const std::wstring base = StrField(container, "base");
@@ -393,10 +389,8 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   {
     const bool is_hap = hap != nullptr && hap->is_object();
     if (sig == nullptr) {
-      // HAP 的签名是鸿蒙自己的块（不是 APK Signing Block），v1 没解析：
-      // 不能说"可能未签名"——那是假的，只能说没解析。
-      AddRow(&files, L"签名", is_hap ? L"未解析（HAP 签名块 v1 不做）"
-                                     : L"未发现签名（可能未签名或被重打包）");
+      // 用户只关心"这个功能有没有"：没实现的功能一律写"未实现"，不解释原因。
+      AddRow(&files, L"签名", is_hap ? L"未实现" : L"未发现签名（可能未签名或被重打包）");
     } else {
       const std::vector<std::string> schemes = StringArray(sig, "scheme");
       if (!schemes.empty()) AddRow(&files, L"签名", JoinStrings(schemes, L", ", 8));

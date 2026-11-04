@@ -87,6 +87,23 @@ const char kContainerSample[] = R"json({
   "diagnostics": {"elapsedMs": 13.6}
 })json";
 
+// 鸿蒙 HAP 形状（M4d）：hap 块 + 未实现的签名
+const char kHapSample[] = R"json({
+  "schema": 1,
+  "kind": "hap",
+  "file": {"path": "D:/x/a.hap", "size": 417881, "mtime": 1793774063},
+  "app": {"package": "com.xm.ShuaTi", "label": "刷题宝", "versionName": "1.0.0",
+          "versionCode": 1000000},
+  "hap": {"module": "entry", "type": "entry", "mainAbility": "EntryAbility",
+          "minAPI": 60000020, "targetAPI": 60000020, "compileSdk": "6.0.0.47",
+          "deviceTypes": ["phone"], "abilities": 1, "extensionAbilities": 1},
+  "icon": {"source": "resources/base/media/foreground.png", "width": 512, "height": 512,
+           "adaptive": false},
+  "components": {"activities": 1},
+  "permissions": [{"name": "ohos.permission.INTERNET", "declared": true}],
+  "diagnostics": {"elapsedMs": 0.6}
+})json";
+
 void DumpModel(const apksx::PageModel& model) {
   std::wprintf(L"label: %ls\n", model.label.c_str());
   std::wprintf(L"package: %ls\n", model.package.c_str());
@@ -323,6 +340,33 @@ int RunSelfTest() {
           "文件组有「安装包类型 = XAPK（2 个 APK）」");
     const std::wstring* inner_apk = FindValue(container_model, L"内层 APK");
     Check(inner_apk != nullptr && *inner_apk == L"com.example.app.apk", "文件组有内层 APK 名");
+  }
+
+  // ---- 鸿蒙 HAP（M4d）：技术组字段、安装包类型、签名"未实现"
+  {
+    apksx::json::ValuePtr hap_doc;
+    const bool hap_parsed =
+        apksx::json::Parse(kHapSample, &hap_doc, &err) && hap_doc != nullptr;
+    Check(hap_parsed, "hap JSON parses");
+    apksx::PageModel hap_model;
+    if (hap_parsed) {
+      Check(apksx::BuildPageModel(*hap_doc, L"a.hap", &hap_model, &err), "hap model builds");
+    }
+    Check(hap_model.label == L"刷题宝", "hap 应用名来自 Ability label");
+    const std::wstring* module = FindValue(hap_model, L"模块");
+    Check(module != nullptr && module->find(L"entry") == 0, "技术组有模块行");
+    const std::wstring* api = FindValue(hap_model, L"API 版本");
+    Check(api != nullptr && api->find(L"60000020") != std::wstring::npos, "技术组有 API 版本");
+    const std::wstring* compile_sdk = FindValue(hap_model, L"编译 SDK");
+    Check(compile_sdk != nullptr && *compile_sdk == L"6.0.0.47", "技术组有编译 SDK");
+    const std::wstring* components = FindValue(hap_model, L"组件");
+    Check(components != nullptr && *components == L"Ability 1 · Extension 1",
+          "组件行给 Ability/Extension 计数");
+    const std::wstring* kind_row = FindValue(hap_model, L"安装包类型");
+    Check(kind_row != nullptr && kind_row->find(L"HAP") == 0, "文件组有安装包类型 HAP");
+    const std::wstring* sig_row = FindValue(hap_model, L"签名");
+    Check(sig_row != nullptr && *sig_row == L"未实现", "HAP 签名行直接写「未实现」");
+    Check(FindValue(hap_model, L"名称引用") == nullptr, "不再出现「名称引用」行");
   }
 
   // 坏 JSON：必须失败而不是"半个模型"

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 #include "core/json_lite.h"
 #include "core/zip_reader.h"
@@ -13,6 +14,7 @@ namespace {
 constexpr uint64_t kMaxHapManifest = 4ull * 1024 * 1024;
 constexpr uint64_t kMaxLayeredJson = 64ull * 1024;
 constexpr uint64_t kMaxHapIconRead = 16ull * 1024 * 1024;
+constexpr uint64_t kMaxHapIndexRead = 64ull * 1024 * 1024;
 
 std::string LowerAscii(const std::string& in) {
   std::string out = in;
@@ -179,12 +181,144 @@ bool ResolveMediaRef(const ZipReader& zip, const std::string& ref, std::string* 
   return false;
 }
 
+// ---------------------------------------------------------------- resources.index（RestoolV2）
+// 格式依据：openharmony/developtools_global_resource_tool 的 resource_table.h / resource_table.cpp
+// （同一份代码既写也读，字段顺序是权威的）：
+//   IndexHeaderV2 {version[128], length, keyCount, dataBlockOffset}
+//   KeyConfig     {"KEYS", configId, keyCount, KeyParam[keyCount]}
+//   IdSetHeader   {"IDSS", length, typeCount, idCount}
+//   ResTypeHeader {resType, length, count}
+//   ResIndex      {resId, offset, length, name[length]}
+//   ResInfo@offset{resId, length, valueCount} + valueCount × {configId, dataOffset}
+//   值 @dataOffset: u16 长度 + UTF-8 字节
+// 我们只用它做一件事：把 $string:app_name 解成真名（取默认配置那一条）。
+constexpr size_t kV2HeaderLen = 128 + 12;
+constexpr size_t kKeyConfigHeaderLen = 12;
+constexpr size_t kKeyParamLen = 8;
+constexpr size_t kIdSetHeaderLen = 16;
+constexpr size_t kResTypeHeaderLen = 12;
+constexpr size_t kResIndexLen = 12;
+constexpr size_t kResInfoLen = 12;
+
+class IndexReader {
+ public:
+  IndexReader(const uint8_t* data, size_t size) : data_(data), size_(size) {}
+
+  bool Has(size_t offset, size_t length) const {
+    return offset <= size_ && length <= size_ - offset;
+  }
+  bool Tag(size_t offset, const char* tag) const {
+    return Has(offset, 4) && std::memcmp(data_ + offset, tag, 4) == 0;
+  }
+  uint16_t U16(size_t offset) const {
+    return static_cast<uint16_t>(data_[offset] | (data_[offset + 1] << 8));
+  }
+  uint32_t U32(size_t offset) const {
+    return static_cast<uint32_t>(data_[offset]) |
+           (static_cast<uint32_t>(data_[offset + 1]) << 8) |
+           (static_cast<uint32_t>(data_[offset + 2]) << 16) |
+           (static_cast<uint32_t>(data_[offset + 3]) << 24);
+  }
+  std::string Str(size_t offset, size_t length) const {
+    return std::string(reinterpret_cast<const char*>(data_ + offset), length);
+  }
+
+ private:
+  const uint8_t* data_ = nullptr;
+  size_t size_ = 0;
+};
+
+// 在 ResIndex 指向的 ResInfo 里挑"默认配置"（keyCount == 0 的 configId）的值
+bool ReadDefaultStringValue(const IndexReader& view,
+                            const std::vector<uint32_t>& default_configs,
+                            size_t res_info_offset, std::string* out) {
+  if (!view.Has(res_info_offset, kResInfoLen)) return false;
+  const uint32_t value_count = view.U32(res_info_offset + 8);
+  size_t cursor = res_info_offset + kResInfoLen;
+  uint32_t best_offset = 0;
+  int best_rank = 1 << 30;
+  bool found = false;
+  for (uint32_t i = 0; i < value_count; ++i) {
+    if (!view.Has(cursor, 8)) break;
+    const uint32_t config_id = view.U32(cursor);
+    const uint32_t data_offset = view.U32(cursor + 4);
+    cursor += 8;
+    const bool is_default =
+        std::find(default_configs.begin(), default_configs.end(), config_id) !=
+        default_configs.end();
+    const int rank = is_default ? 0 : 1;  // 非默认配置只作兜底
+    if (rank < best_rank) {
+      best_rank = rank;
+      best_offset = data_offset;
+      found = true;
+    }
+  }
+  if (!found || !view.Has(best_offset, 2)) return false;
+  const uint16_t length = view.U16(best_offset);
+  if (!view.Has(best_offset + 2, length)) return false;
+  *out = view.Str(best_offset + 2, length);
+  return true;
+}
+
 }  // namespace
 
 bool LooksLikeHap(const ZipReader& zip) {
   if (!zip.IsOpen()) return false;
   if (zip.Find("AndroidManifest.xml") != nullptr) return false;
   return zip.Find("module.json") != nullptr;
+}
+
+bool ResolveHapString(const std::vector<uint8_t>& index, uint32_t res_id,
+                      const std::string& res_name, std::string* out) {
+  if (out == nullptr || index.size() < kV2HeaderLen) return false;
+  const IndexReader view(index.data(), index.size());
+  const uint32_t key_count = view.U32(128 + 4);
+  if (key_count > 4096) return false;
+
+  // 键配置：记下 keyCount == 0 的 configId（默认/无限定词）
+  std::vector<uint32_t> default_configs;
+  size_t cursor = kV2HeaderLen;
+  for (uint32_t i = 0; i < key_count; ++i) {
+    if (!view.Has(cursor, kKeyConfigHeaderLen) || !view.Tag(cursor, "KEYS")) return false;
+    const uint32_t config_id = view.U32(cursor + 4);
+    const uint32_t param_count = view.U32(cursor + 8);
+    if (param_count > 4096) return false;
+    cursor += kKeyConfigHeaderLen;
+    const size_t params_len = static_cast<size_t>(param_count) * kKeyParamLen;
+    if (!view.Has(cursor, params_len)) return false;
+    cursor += params_len;
+    if (param_count == 0) default_configs.push_back(config_id);
+  }
+
+  if (!view.Has(cursor, kIdSetHeaderLen) || !view.Tag(cursor, "IDSS")) return false;
+  const uint32_t type_count = view.U32(cursor + 8);
+  if (type_count > 64) return false;
+  cursor += kIdSetHeaderLen;
+
+  for (uint32_t t = 0; t < type_count; ++t) {
+    if (!view.Has(cursor, kResTypeHeaderLen)) return false;
+    const uint32_t res_type = view.U32(cursor);
+    const uint32_t res_count = view.U32(cursor + 8);
+    if (res_type > 0xFFFF || res_count > 200000) return false;
+    cursor += kResTypeHeaderLen;
+
+    for (uint32_t r = 0; r < res_count; ++r) {
+      if (!view.Has(cursor, kResIndexLen)) return false;
+      const uint32_t id = view.U32(cursor);
+      const uint32_t offset = view.U32(cursor + 4);
+      const uint32_t name_len = view.U32(cursor + 8);
+      if (!view.Has(cursor + kResIndexLen, name_len)) return false;
+      const std::string name = view.Str(cursor + kResIndexLen, name_len);
+      cursor += kResIndexLen + name_len;
+
+      // id 唯一（跨 resType 也不重复）；名字命中更明确，优先按名字
+      const bool name_matches = !res_name.empty() && name == res_name;
+      const bool id_matches = res_id != 0 && id == res_id;
+      if (!name_matches && !id_matches) continue;
+      if (ReadDefaultStringValue(view, default_configs, offset, out) && !out->empty()) return true;
+    }
+  }
+  return false;
 }
 
 bool ReadHapManifest(const ZipReader& zip, HapInfo* out, Error* err) {
@@ -220,14 +354,11 @@ bool ReadHapManifest(const ZipReader& zip, HapInfo* out, Error* err) {
   out->compile_sdk = StrField(app, "compileSdkVersion");
   out->icon_ref = StrField(app, "icon");
 
-  // 标签：字面量就直接用，$string: 只记引用（v1 不解 resources.index）
-  const std::string label = StrField(app, "label");
-  if (!label.empty()) {
-    if (label.size() > 8 && label.compare(0, 8, "$string:") == 0) {
-      out->label_ref = label;
-    } else {
-      out->label = label;
-    }
+  // 标签的引用先记下，等 module/abilities 解析完再决定用哪一条（见下）
+  const std::string app_label = StrField(app, "label");
+  const uint32_t app_label_id = UintField(app, "labelId");
+  if (app_label.size() > 8 && app_label.compare(0, 8, "$string:") == 0) {
+    out->app_label_ref = app_label;
   }
 
   out->module_name = StrField(module, "name");
@@ -246,12 +377,46 @@ bool ReadHapManifest(const ZipReader& zip, HapInfo* out, Error* err) {
     }
   }
 
+  // 鸿蒙把"桌面图标 + 名称"配在 UIAbility 上（abilities[].icon/label），
+  // app.label 只是缺省值：优先用 mainElement 那个 ability 的 label。
+  std::string label_ref = app_label;
+  uint32_t label_id = app_label_id;
+  bool have_ability_label = false;
   if (const json::Value* abilities = Field(module, "abilities")) {
     if (abilities->type == json::Type::Array) {
       for (const json::ValuePtr& item : abilities->items) {
         const std::string start = StrField(item.get(), "startWindowIcon");
         if (!start.empty() && out->start_icon_ref.empty()) out->start_icon_ref = start;
+
+        const std::string name = StrField(item.get(), "name");
+        const bool is_main = out->main_element.empty() ? !have_ability_label
+                                                       : name == out->main_element;
+        const std::string ability_label = StrField(item.get(), "label");
+        if (is_main && !ability_label.empty() && !have_ability_label) {
+          label_ref = ability_label;
+          label_id = UintField(item.get(), "labelId");
+          have_ability_label = true;
+        }
       }
+    }
+  }
+
+  // 字面量直接用；$string:NAME → 去 resources.index 里取默认配置的值
+  if (!label_ref.empty()) {
+    if (label_ref.size() > 8 && label_ref.compare(0, 8, "$string:") == 0) {
+      out->label_ref = label_ref;
+      out->label_id = label_id;
+      std::vector<uint8_t> index_bytes;
+      const ZipEntry* index_entry = zip.Find("resources.index");
+      if (index_entry != nullptr &&
+          zip.Read(*index_entry, kMaxHapIndexRead, &index_bytes, nullptr)) {
+        std::string value;
+        if (ResolveHapString(index_bytes, label_id, label_ref.substr(8), &value)) {
+          out->label = value;
+        }
+      }
+    } else {
+      out->label = label_ref;
     }
   }
 

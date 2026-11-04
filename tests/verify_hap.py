@@ -52,6 +52,73 @@ def image_size(data: bytes) -> tuple[str, int, int] | None:
     return None
 
 
+def parse_string_resources(index_bytes: bytes) -> dict[str, str]:
+    """Independent RestoolV2 reader: string resource name -> default-config value.
+
+    Layout mirrors openharmony/developtools_global_resource_tool's resource_table.cpp:
+    IndexHeaderV2 (version[128] + length + keyCount + dataBlockOffset), KeyConfig blocks,
+    an IDSS block of ResTypeHeader/ResIndex, and ResInfo/value tables addressed by offset.
+    """
+    u32 = lambda o: struct.unpack_from("<I", index_bytes, o)[0]
+    u16 = lambda o: struct.unpack_from("<H", index_bytes, o)[0]
+
+    key_count = u32(0x84)
+    cursor = 140
+    defaults: list[int] = []
+    for _ in range(key_count):
+        config_id, param_count = u32(cursor + 4), u32(cursor + 8)
+        cursor += 12 + param_count * 8
+        if param_count == 0:
+            defaults.append(config_id)
+
+    if index_bytes[cursor:cursor + 4] != b"IDSS":
+        raise RuntimeError("not a RestoolV2 index (no IDSS tag)")
+
+    type_count = u32(cursor + 8)
+    cursor += 16
+    out: dict[str, str] = {}
+    for _ in range(type_count):
+        res_type, _length, count = u32(cursor), u32(cursor + 4), u32(cursor + 8)
+        cursor += 12
+        for _ in range(count):
+            res_id, offset, name_len = u32(cursor), u32(cursor + 4), u32(cursor + 8)
+            name = index_bytes[cursor + 12:cursor + 12 + name_len].decode("utf-8", "replace")
+            cursor += 12 + name_len
+            if res_type != 9:  # 9 = string
+                continue
+            value_count = u32(offset + 8)
+            pos = offset + 12
+            chosen = None
+            for _ in range(value_count):
+                config_id, data_offset = u32(pos), u32(pos + 4)
+                pos += 8
+                length = u16(data_offset)
+                value = index_bytes[data_offset + 2:data_offset + 2 + length]
+                if config_id in defaults:
+                    chosen = value
+            if chosen is not None:
+                out[name] = chosen.decode("utf-8", "replace")
+    return out
+
+
+def expected_label(module_json: dict, index_bytes: bytes) -> dict[str, str]:
+    """Home screen shows the UIAbility label; app.label is only the fallback."""
+    app = module_json.get("app", {})
+    module = module_json.get("module", {})
+    main = module.get("mainElement", "")
+    ref = ""
+    for ability in module.get("abilities") or []:
+        if main and ability.get("name") == main:
+            ref = ability.get("label", "")
+            break
+    if not ref:
+        ref = app.get("label", "")
+    if not ref.startswith("$string:"):
+        return {"ref": ref, "value": ref}
+    value = parse_string_resources(index_bytes).get(ref[len("$string:"):], "")
+    return {"ref": ref, "value": value}
+
+
 def expected_from_manifest(module_json: dict) -> dict:
     app = module_json.get("app", {})
     module = module_json.get("module", {})
@@ -85,7 +152,14 @@ def check_one(apkinfo: str, hap: Path) -> list[str]:
         problems.append(f"{hap.name}: kind={info.get('kind')!r} (expected 'hap')")
 
     with zipfile.ZipFile(hap) as z:
-        expected = expected_from_manifest(json.loads(z.read("module.json")))
+        module_json = json.loads(z.read("module.json"))
+        expected = expected_from_manifest(module_json)
+        label = expected_label(module_json, z.read("resources.index"))
+        ours_label = info.get("app", {}).get("label", "")
+        if label["value"] and ours_label != label["value"]:
+            problems.append(
+                f"{hap.name}: label ours={ours_label!r} index={label['value']!r} ({label['ref']})"
+            )
 
         app = info.get("app", {})
         hap_block = info.get("hap", {})
@@ -126,6 +200,7 @@ def check_one(apkinfo: str, hap: Path) -> list[str]:
                             f"file={w}x{h}"
                         )
                     print(f"  {hap.name}: {expected['package']} {expected['versionName']} "
+                          f"label={ours_label!r} "
                           f"({expected['versionCode']}) module={expected['module']} "
                           f"icon={source} [{kind} {w}x{h}] "
                           f"{info.get('diagnostics', {}).get('elapsedMs')} ms")
