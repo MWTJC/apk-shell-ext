@@ -8,10 +8,10 @@
 | [../README.md](../README.md) | 项目是什么、当前阶段、目录结构 | 第一次进入 |
 | [design.md](design.md) | **设计出发点**：为什么要"缩略图先行、元数据懒解析"；四条接口的调用频率对比；既有方案（HashTab/果核/ApkShellext2）的实测结论 | 想改设计前 |
 | [architecture.md](architecture.md) | 组件与进程边界、三个产物的契约、JSON schema v1、注册表契约、缓存 | 写代码前 |
-| [formats.md](formats.md) | 八种安装包的容器/manifest/资源表/图标位置、跨格式选图算法、安全限额 | 做 M4 时 |
+| [formats.md](formats.md) | 安装包的容器/manifest/资源表/图标位置矩阵与安全限额（v1 实做 APK 家族 + HAP；AAB/IPA/APPX 保留结构备查） | 做 M4 时 |
 | [roadmap.md](roadmap.md) | **M0–M5 阶段**、每阶段交付/验收/退出条件、风险登记、DoD | 每次开工前 |
 | [verification.md](verification.md) | 把"无感"变成可复现的数字：ProcMon 配方、耗时/内存判据、记录表 | 每阶段收尾 |
-| [adr/](adr/README.md) | 已冻结的架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主） | 想推翻某个约束前 |
+| [adr/](adr/README.md) | 已冻结的架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主、格式范围） | 想推翻某个约束前 |
 
 ## 写作约定
 

@@ -135,7 +135,7 @@ JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJo
 `.xapk/.apks/.apkm`（外层 ZIP + 内层 base.apk）走同一条解析路径：`src/core/package.cpp` 先判容器，
 Stored 的 base 用 `SliceSource` 在外层文件上开窗口（**1.25 GB 的 PUBG xapk 只读 107 MB 的 base**），
 deflate 的 base 整块解压且上限 512 MB。JSON 新增 `container` 块（`base` + `splits`）；
-属性页多出「安装包类型」「内层 APK」两行与可折叠「分包 · N 项」组；`register.ps1` 默认注册四个扩展名。
+属性页多出「安装包类型」「内层 APK」两行与可折叠「分包 · N 项」组；`register.ps1` 默认注册四个扩展名（M4d 又加了 `.hap`，共五个）。
 实测：Poweramp xapk 缩略图 24 ms（经 shell 110 ms）、属性页 188–282 ms；
 PUBG（1.25 GB）缩略图 35/20 ms（冷/热）、worker 9.5–12.4 ms；2/2 与 aapt2 一致；4 个坏容器全部优雅失败。
 **注意**：`.apks`（bundletool）与 `.apkm`（APKMirror）只有启发式 + 坏样本，没有真实样本验证。
@@ -145,7 +145,7 @@ PUBG（1.25 GB）缩略图 35/20 ms（冷/热）、worker 9.5–12.4 ms；2/2 �
 鸿蒙 `.hap`：`module.json`（JSON）直读（`src/core/hap.cpp`），判定放在 APK/容器之前；
 图标走 `$media:` 三级启发式（名字 → layered json 的 `foreground`/`background` 键名 → `startWindowIcon`/约定名/最大 PNG）。
 JSON 新增 `hap` 块（模块 / 主 Ability / min-targetAPI / 编译 SDK / 设备类型 / Ability 计数 / labelRef），
-**不把鸿蒙 API 号塞进 `app.minSdk/targetSdk`**；属性页有模块/API/设备类型/Ability/权限，签名行如实写"未解析"。
+**不把鸿蒙 API 号塞进 `app.minSdk/targetSdk`**；属性页有模块/API/设备类型/Ability/权限，签名行直接写"未实现"。
 **应用名**：`$string:` 引用现在会去 `resources.index`（RestoolV2）取默认配置的值，优先用 `mainElement` 那个 Ability 的 `label`
 （鸿蒙桌面显示的就是它）——实测 `刷题宝`、`LibreTV`，与独立 Python 解析器交叉校验 2/2。
 实测：两个 HAP 与 `module.json` 交叉校验 2/2、缩略图 41 ms（经 shell 87/61 ms）、属性页 156 ms、worker < 2 ms。
@@ -159,17 +159,42 @@ JSON 新增 `hap` 块（模块 / 主 Ability / min-targetAPI / 编译 SDK / 设�
 4. M3 / M2 尾巴（用户 2026-11-04 明确说"算边缘情况，等遇到问题再说"）：真实 150%/200% 人眼确认、
    TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
 
-**接力说明**（下一会话从这里开始）
+**接力说明**（下一会话从这里开始，2026-11-04 收口）
 
-- 构建：`tools\build.cmd Release` → `out\x64\{apkthumb.dll, apkinfo.exe, apkprop.dll, thumbtest.exe, proptest.exe}`。
-- 夹具：`python tests\gen_fixtures.py`（4 正常 + 8 坏包）、`python tests\gen_big_arsc.py`（19.7 MB 真 arsc + deflate 变体）、
-  `python tests\gen_container_fixtures.py --real <xapk>`（4 个坏容器）。
-- 真实样本：`tests\fixtures\real\`（3 个普通包 + 2 个 `.xapk` + 2 个 `.hap` + `big\` 里 1.26 G / 1.92 G 各一个），**gitignore，不入库**。
-- 验收：`python tests\verify_apkinfo.py <apk...>`（对 aapt2）、`python tests\verify_container.py "<xapk-glob>"`、
-  `python tests\verify_hap.py "<hap-glob>"`、
-  `out\x64\propsheet_model_test.exe --selftest`（行模型 + 布局/DPI 断言）、`out\x64\thumbtest.exe --dir <目录> --json`、
-  `out\x64\thumbtest.exe --shell --file <apk>`（走 Explorer 管线）、`out\x64\apkinfo.exe --json <apk>`。
-- 扩展当前**已注册**（HKCU）：`powershell -File tools\register.ps1 -Uninstall` 可撤；诊断日志需手动开 `%TEMP%\apk-shell-ext.debug.on`。
+当前状态一句话：**M0–M4 全部收口**（M4 = `.xapk/.apks/.apkm` + `.hap`，其余格式按
+[ADR-0006](docs/adr/0006-format-scope-cut.md) 不做），下一个里程碑是 **M5 交付打磨**。
+
+- **构建**：`tools\build.cmd Release` → `out\x64\{apkthumb.dll, apkprop.dll, apkinfo.exe, thumbtest.exe, proptest.exe}`。
+  坑：`apkprop.dll` 被 explorer 占用时链接会 `LNK1104`——先 `Stop-Process -Name explorer -Force` 再编，编完 explorer 会自启。
+- **人造夹具**（可随时重造，不入库）：`tests\gen_fixtures.py`（4 正常 + 8 坏包）、`tests\gen_signed_fixtures.py`、
+  `tests\gen_big_arsc.py`（19.7 MB 真 arsc + deflate 变体）、`tests\gen_container_fixtures.py --real <xapk>`
+  （4 个坏容器 + 3 个坏 HAP）。
+- **真实样本**（`tests\fixtures\real\`，**gitignore**）：3 个普通 APK（aida64 / qwxds / wwlocation-probe）、
+  2 个 `.xapk`（Poweramp 22 MB；PUBG 1.25 GB）、2 个 `.hap`（ShuaTiBao108、entry-default-unsigned）、
+  `big\`（1.26 G / 1.92 G）。换机器时这些要重新准备，其它夹具都能脚本重造。
+- **验收全套**（按顺序跑，全绿才算没退化）：
+
+  ```
+  python tests\verify_apkinfo.py tests\fixtures\generated\*.apk        :: 6/6
+  python tests\verify_apkinfo.py tests\fixtures\real\*.apk             :: 3/3
+  python tests\verify_signature.py --glob "tests\fixtures\generated\signed\*.apk"  :: 3/3
+  python tests\verify_container.py "tests\fixtures\real\*.xapk"        :: 2/2
+  python tests\verify_hap.py "tests\fixtures\real\*.hap"               :: 2/2（含应用名交叉校验）
+  out\x64\propsheet_model_test.exe --selftest                              :: 60 ok / 0 fail（含布局 20,832 组合）
+  out\x64\thumbtest.exe --dir tests\fixtures\generated --repeat 1 --json  :: 1 个预期失败（f_noicon.apk）
+  out\x64\thumbtest.exe --shell --file <pkg>                               :: 走 Explorer 管线
+  ```
+
+- **注册状态**：HKCU 已注册 `.apk/.xapk/.apks/.apkm/.hap`（缩略图 + 属性页）。
+  `powershell -File tools\register.ps1 -Uninstall` 可完全撤除；
+  诊断日志需手动建 `%TEMP%\apk-shell-ext.debug.on`。
+- **明确的未实现清单**（信息页对这类功能一律直接写"未实现"，不解释原因）：
+  HAP 签名块、layered icon 合成（只取 foreground）、`$media:<id>` 的 id→文件名映射、`.hsp`/`.app` 套件、
+  HAP 多语言/限定词（只取默认配置）、Restool v1 老索引。
+- **已被用户明确挂起**（2026-11-04："算边缘情况，等遇到问题再说"）：真实 150%/200% DPI 人眼确认、
+  TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
+- **下一会话建议起手**：M5 —— 安装器（一次 UAC）+ VERSIONINFO + 三枚格式差异化 ico（APK/XAPK/HAP）+
+  诊断开关 + 中英文 + 缓存清理工具；HAP 的两件"锦上添花"（layered 合成、id→文件名）可以穿插做。
 
 ## 变更纪律（写给自己）
 
