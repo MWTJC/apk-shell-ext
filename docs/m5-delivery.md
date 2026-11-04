@@ -92,7 +92,7 @@ apkinfo.exe --lang zh|en|auto        属性页界面语言（写 HKCU\Software\a
 
 | 项 | 数字 |
 | --- | --- |
-| 安装包 | `apk-shell-ext-setup-1.0.0.exe` 2,181,806 字节（LZMA2）；解包后 3 二进制 + 3 图标 + 文档 |
+| 安装包 | `apk-shell-ext-setup-1.0.0.exe` 2,181,910 字节（LZMA2，clean 构建后重打的最终包）；解包后 3 二进制 + 3 图标 + 文档 |
 | 按用户静默安装 | `/VERYSILENT` 退出码 0，**无 UAC**；安装目录 7 个文件 |
 | 安装状态自检 | `verify-install.ps1 -Phase check -State installed` → **ok**（4 个文件 + 5 扩展名 × 3 个键 + 两个 CLSID + 应用列表条目） |
 | 卸载 | `unins000.exe /VERYSILENT` 退出码 0；`check -State removed` → **ok**；装前/卸后注册表+文件快照 **diff 一致（零残留）** |

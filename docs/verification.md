@@ -1076,7 +1076,7 @@ $ python tests/verify_hap.py "tests/fixtures/real/*.hap"
 ```
 $ tools\pack.cmd
 [pack] compiling installer\apk-shell-ext.iss
-[pack] done: apk-shell-ext-setup-1.0.0.exe      -> 2,181,806 字节
+[pack] done: apk-shell-ext-setup-1.0.0.exe      -> 2,181,910 字节
 
 $ out\dist\apk-shell-ext-setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 exit=0                     （按用户安装，全程没有 UAC 提示）
