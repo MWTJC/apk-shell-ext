@@ -6,6 +6,9 @@ param(
     [string]$OutPng = 'C:\Users\TJC\AppData\Local\hermes\cache\scratch\propsheet.png',
     [int]$WaitMs = 2500,
     [int]$CtrlTabPresses = 1,
+    # Exact caption of the custom property page to select (e.g. 'Package info').
+    # Defaults to the Chinese caption, which is what this machine's UI shows.
+    [string]$TabName = '',
     # Click before capturing: "x,y" offsets from the dialog's top-left corner (real
     # mouse input, so child-window geometry does not matter).
     [string]$ClickPoint = '',
@@ -124,6 +127,7 @@ Start-Sleep -Milliseconds 250
 # Select the custom tab through UI Automation (keyboard tab switching is unreliable
 # because the dialog is opened by another process and may not take focus).
 $labelTab = & $u @(0x5B89, 0x88C5, 0x5305, 0x4FE1, 0x606F)  # an zhuang bao xin xi
+if (-not [string]::IsNullOrEmpty($TabName)) { $labelTab = $TabName }
 $selected = -not [string]::IsNullOrEmpty($WindowTitle)
 if ($SkipUia) { $selected = $false }
 try {

@@ -174,6 +174,7 @@ reg query "HKCR\.apk\DefaultIcon" /ve
 | R-0011 | 2026-11-04 | M3 补测 + M4a | 布局纯函数 20,832 组合无裁切；100 次开关句柄 9376→9177、残留 worker 0；两份 `.xapk` 与 aapt2 2/2；4 个坏容器优雅失败 | §19 | 真实 DPI 肉眼确认、`.apks/.apkm` 样本 |
 | R-0012 | 2026-11-04 | M4d | 鸿蒙 `.hap`：`module.json` + `$media:` 三级图标启发式；2/2 与 `module.json` 一致；3 个坏 HAP | §20 | `$string:`（当时未做，R-0013 已补）、layered 合成 |
 | R-0013 | 2026-11-04 | M4d | 应用名解析（RestoolV2 `resources.index`）+ 范围裁剪（ADR-0006）+ 信息页"未实现"口径；`刷题宝`/`LibreTV` 2/2 | §21 | 多语言限定词、Restool v1 老索引、id→文件名、`.hsp`、HAP 签名 |
+| R-0014 | 2026-11-04 | M5 | 交付打磨：Inno 安装器（按用户零 UAC）装→卸零残留、三枚格式图标（16–256 五档）+ `DefaultIcon`、VERSIONINFO 1.0.0.0、诊断/缓存/语言命令、中英双语属性页；全套回归 6/6·3/3·3/3·2/2·2/2·71 ok | §22 | `/ALLUSERS` 实跑、代码签名、ProcMon 复跑、`proptest` 修复 |
 
 ## 10. R-0002 详细记录（M1，2026-11-03）
 
@@ -1045,3 +1046,134 @@ $ python tests/verify_hap.py "tests/fixtures/real/*.hap"
 2. **Restool v1 老索引**（版本串 `"Restool "` 而非 `"RestoolV2 "`）：代码只认 v2，v1 包会走"应用名未解析"。
 3. `$media:<资源 id>`（layered 里那种）的 id→文件名映射仍没做，只按 JSON 键名推断。
 4. `.hsp` / `.app` 多模块套件、HAP 签名块：均未实现（信息页写"未实现"）。
+
+## 22. R-0014 记录（M5 交付打磨，2026-11-04）
+
+### 环境
+
+与 §0 基线一致。本轮的注册走**安装器**（Inno Setup 6，按用户装），不再用 `register.ps1`；
+验证过程中 `explorer.exe` 被重启过 3 次（换 DLL / 换图标缓存 / 换界面语言）。
+
+### 变更
+
+1. **分发**：`installer\apk-shell-ext.iss`（Inno Setup 6）+ `tools\pack.cmd`；自研 `apkinst.exe` 删除，
+   其"装好之后"的命令并入 `apkinfo.exe`（`--status / --diag / --clear-cache / --cache-info / --lang`）。
+   决策见 [ADR-0007](adr/0007-inno-setup-per-user-install.md)。默认按用户安装（零 UAC），
+   `{autopf}` = `%LOCALAPPDATA%\Programs\apk-shell-ext`，注册表 `HKCU\Software\Classes`。
+2. **格式图标**：`tools\gen_icons.py` 生成 `icons\{apk,apks,hap}.ico`（16/24/32/48/256 各档独立绘制），
+   安装器与 `register.ps1` 都写 `DefaultIcon`（`.apk` 绿机器人 / `.xapk/.apks/.apkm` 靛紫双卡 / `.hap` 红六边形）。
+3. **VERSIONINFO**：`src/version.h` 单一来源，四个二进制统一 `1.0.0.0`，en-US + zh-CN 双块；
+   `APKSX_PARSER_VERSION` 由 `m4a` → `m5`（缓存键随之失效）。
+4. **中英文**：`src/core/i18n.{h,cpp}`（`Tr` 77 条界面文案 + `TrMsg` 约 60 条解析器错误字典），
+   语言顺序 `HKCU\Software\apk-shell-ext\UiLanguage` → `APKSX_LANG` → 系统 UI 语言；
+   页面标题从 rc 的 `STRINGTABLE` 移到 i18n。
+5. 新增工具与脚本：`tools\pack.cmd`、`tools\verify-install.ps1`（安装状态/残留快照与 diff）、
+   `tools\capture-view.ps1`（用 `Shell.Application` 的 `Document.CurrentViewMode` 切视图并截窗口）、
+   `tools\list-window.ps1`；`tools\capture-propsheet.ps1` 增加 `-TabName`（双语后中文标题硬编码不再适用）。
+
+### 结果 · 安装 / 卸载（真装真卸）
+
+```
+$ tools\pack.cmd
+[pack] compiling installer\apk-shell-ext.iss
+[pack] done: apk-shell-ext-setup-1.0.0.exe      -> 2,181,806 字节
+
+$ out\dist\apk-shell-ext-setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+exit=0                     （按用户安装，全程没有 UAC 提示）
+
+$ powershell -File tools\verify-install.ps1 -Phase check -State installed
+[check] installed : ok
+
+$ "$LOCALAPPDATA\Programs\apk-shell-ext\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
+exit=0
+
+$ powershell -File tools\verify-install.ps1 -Phase check -State removed
+[check] removed : ok
+
+$ powershell -File tools\verify-install.ps1 -Phase diff -A 装前.txt -B 卸后.txt
+[diff] identical (zero residue)
+```
+
+`verify-install.ps1 -State installed` 断言的内容：`apkthumb.dll`/`apkprop.dll`/`apkinfo.exe`/`unins000.exe`
+四个文件在位；五个扩展名的 `ShellEx\{E357FCCD…}`、`shellex\PropertySheetHandlers\ApkInfo`、
+`DefaultIcon` 三个值都等于安装目录里的实际路径；两个 `CLSID\…\InprocServer32` 指向安装目录；
+应用列表条目 `{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B03}_is1` 存在。
+`-State removed` 断言同一批键与目录**全部消失**（含卸载条目），即 V6 判据。
+
+两个实测坑（都写进 ADR-0007 了）：
+
+- `Root: HKCR` 在非管理员模式下会去写 HKLM，`RegCreateKeyEx` 返回代码 5，整个安装回滚
+  （`/LOG` 原文：「创建注册表项时出错 … 拒绝访问」）。改用官方推荐的 `Root: HKA` +
+  `Subkey: Software\Classes\…` 后一次通过。
+- 卸载自己时 `unins000.exe` 正在安装目录里跑：Inno 自己处理得了，自研那条路要靠"复制到
+  `%TEMP%` 再等父进程退出"才删得掉，这是放弃自研的直接原因之一。
+
+### 结果 · 图标
+
+```
+$ uv run --with pillow python tools/gen_icons.py
+wrote icons\apk.ico  (20364 bytes, sizes (16, 24, 32, 48, 256))
+wrote icons\apks.ico (19320 bytes, …)
+wrote icons\hap.ico  (20649 bytes, …)
+```
+
+- `docs/evidence/m5-icons-sizes.png`：每枚图标的五个档位 1:1 + 4× 最近邻放大，确认 16/24 px
+  仍有形状（不是糊块）、48 px 起有 "APK"/"XAPK"/"HAP" 字样。
+- `docs/evidence/m5-defaulticons-list-zoom.png`：资源管理器**列表视图**实拍（4× 放大），
+  5 个包：两个 `.apk` 绿机器人、`.xapk` 靛紫双卡、两个 `.hap` 红六边形，16 px 下颜色即可分辨。
+- 换图标后 Explorer 会用旧的图标缓存：删 `%LOCALAPPDATA%\IconCache.db` +
+  `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db` 并重启资源管理器才看到新图
+  （已写进 `install.md` 的 FAQ）。
+
+### 结果 · 界面语言
+
+```
+$ apkinfo --lang zh  ->  [lang] 已设为 中文；重启资源管理器后属性页生效
+$ apkinfo --lang en  ->  [lang] 已设为 English；…
+$ apkinfo --lang auto -> [lang] 已恢复为跟随系统（当前：中文）
+```
+
+- 中文页：`docs/evidence/m5-propsheet-zh.png`（`安装包信息` / `应用` / `技术` / `权限 · 6 项` /
+  `特性 · 4 项（0 必需）` / `解析完成 · 219 ms`）。
+- 英文页：`docs/evidence/m5-propsheet-en.png`（`Package info` / `App` / `Technical` /
+  `Permissions · 6` / `Features · 4 (0 required)` / `Parsed · 172 ms`）。
+- 两张图是同一个包、同一个 DLL，只有 `UiLanguage` 与资源管理器重启的区别。
+- 单元：`propsheet_model_test --selftest` → **71 ok / 0 fail**（原 60 条 + 11 条 i18n）。
+
+### 结果 · 回归（M5 不得让前面的里程碑退化）
+
+```
+python tests\verify_apkinfo.py tests\fixtures\generated\*.apk        6/6
+python tests\verify_apkinfo.py tests\fixtures\real\*.apk             3/3
+python tests\verify_signature.py --glob "…signed\*.apk"              3/3
+python tests\verify_container.py "tests\fixtures\real\*.xapk"        2/2
+python tests\verify_hap.py "tests\fixtures\real\*.hap"               2/2
+out\x64\propsheet_model_test.exe --selftest                          71 ok / 0 fail
+out\x64\thumbtest.exe --dir tests\fixtures\generated --repeat 1      1 个预期失败（f_noicon.apk）
+out\x64\thumbtest.exe --shell --file aida64-1.94.apk                 22.15 ms（缓存清空后二次）
+out\x64\thumbtest.exe --shell --file Poweramp….xapk                  47.05 ms
+out\x64\thumbtest.exe --shell --file ShuaTiBao108.hap                54.99 ms
+```
+
+`apkinfo --status`（安装后）：
+
+```
+.apk   thumb=用户 prop=用户
+        icon="C:\Users\…\Programs\apk-shell-ext\icons\apk.ico",0
+… 五个扩展名同上（xapk/apks/apkm → apks.ico，hap → hap.ico）
+应用列表条目：有
+```
+
+### 未验证（不许当作通过）
+
+1. **整机安装（`/ALLUSERS`，一次 UAC）没有实跑**：会弹 UAC，自动化里会把会话卡住。
+   `.iss` 的 `PrivilegesRequiredOverridesAllowed=dialog commandline` 与 `{autopf}` 分支只做了静态审阅。
+2. **安装器界面只有英文**：官方 Inno 发行版不带中文 `.isl`，第三方翻译不入库。
+3. **代码签名**：v1 无证书，SmartScreen 会拦"未知发布者"；Defender 全盘扫描未复跑（同 M4）。
+4. **ProcMon 复跑 V1/V9 未做**：M5 未改缩略图代码路径，`DefaultIcon` 纯静态不加载 DLL，
+   但"仍然是 0 次 CreateFile"只有推理没有测量。
+5. **`proptest.exe` 失效**：本机 `PropertySheetW` 立即返回 −1（用 M4 时代的旧 DLL 也一样，
+   同一工具在 M3 验收时正常），怀疑是 Windows 11 26300 预览版对非 shell 调用方的限制。
+   属性页验收改用真实资源管理器对话框截图。
+6. 真实 150% / 200% DPI 人眼确认：仍按用户 2026-11-04 的决定挂起。
+7. 英文长文案截断：`Components` 行在窄窗口被省略号截断（tooltip 可看全），中文同级文案不会。

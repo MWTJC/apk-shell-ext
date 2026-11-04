@@ -4,10 +4,10 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 ✅（R-0002）· M2 ✅（R-0005）· M3 ✅（R-0006/0009/0010/0011）· M4 ✅（`.xapk/.apks/.apkm` + `.hap`，R-0011/R-0012/R-0013；范围见 ADR-0006）** |
-| 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
-| 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，✅ JSON v1）· `apkprop.dll`（属性页，✅） |
-| 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
+| 阶段 | **M0–M5 全部完成**（M1 R-0002 · M2 R-0005 · M3 R-0006/0009/0010/0011 · M4 R-0011/R-0012/R-0013 · **M5 R-0014**；格式范围见 ADR-0006，分发见 ADR-0007） |
+| 平台 | Windows 10 1809+ / Windows 11 x64（x86 宿主仍未评估） |
+| 产物 | `apkthumb.dll`（缩略图）· `apkinfo.exe`（解析 worker + 状态/诊断/缓存/语言命令）· `apkprop.dll`（属性页）· **`apk-shell-ext-setup-1.0.0.exe`（单文件安装器，2.1 MB）** |
+| 许可 | MIT（`LICENSE`；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
 
 ## 一句话设计
 
@@ -20,62 +20,93 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 1. 大图标 / 超大图标 / 内容视图里，安装包显示的是自己的 launcher icon（APK / XAPK / HAP）；小图标 / 列表 / 详细信息视图显示**按格式区分的静态图标**（APK / XAPK / HAP 各一枚，`DefaultIcon`，零调用成本）。
 2. 未打开过安装包的目录，浏览、滚动、排序、悬停**一次都不读原文件**（性能与未安装本扩展时相同）。
 3. 右键属性多出「安装包信息」页：包名、应用名、版本、SDK、ABI、密度、语言、权限、签名摘要、哈希；**打开页面才开始解析**，页面先出、字段渐进填充。
+4. 交付形态像个正经软件：**双击装（零 UAC）、应用列表里能卸、卸完零残留**；界面中英双语。
 
 **非目标（v1 明确不做）**
 
-- 不做安装器 / adb 推送 / 应用商店查询 / 联网。
+- 不做安装器以外的东西：不做 adb 推送 / 应用商店查询 / 联网。
 - 不做详情列、排序、悬浮提示、预览窗格（这些都要按目录批量调，性能代价与 P1 冲突，见 ADR-0002）。
+- 不做 `IExtractIcon`（让小图标也显示包内图标）——见 [m5-delivery.md §6](docs/m5-delivery.md)。
 - 不改写 APK / IPA / HAP 文件，不重签名。
 
 ## 目录
 
 ```
 apk-shell-ext/
-├─ docs/            设计、架构、格式矩阵、路线图、验收、ADR
+├─ docs/            设计、架构、格式矩阵、路线图、验收、ADR、安装说明
+├─ installer/       Inno Setup 6 脚本（apk-shell-ext.iss）— M5
+├─ icons/           三枚格式 ico（16/24/32/48/256，由 tools/gen_icons.py 生成）— M5
 ├─ src/
-│  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、签名块、图标定位、容器侦查、WIC、缓存）— ✅ M1/M2/M4a
+│  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、签名块、图标定位、
+│  │                容器侦查、WIC、缓存、i18n）— ✅ M1/M2/M4a/M5
 │  ├─ thumbs/       IThumbnailProvider 壳扩展 — ✅ M1
 │  ├─ propsheet/    IShellPropSheetExt 壳扩展（原生控件单页）— ✅ M3
-│  ├─ worker/       apkinfo.exe（JSON 输出）— M2
+│  ├─ worker/       apkinfo.exe（JSON 输出 + --status/--diag/--clear-cache/--lang）— ✅ M2/M5
+│  ├─ version.h     版本号唯一来源（VERSIONINFO / 安装器都取它）— M5
 │  └─ third_party/  miniz（raw deflate，MIT，只编 C 源）
-├─ tools/           build.cmd（vcvars+CMake+Ninja）、register.ps1（装/卸）
-└─ tests/           gen_fixtures.py（aapt2 造真实包）、thumbtest.cpp（验收工具）
+├─ tools/           build.cmd、pack.cmd（出安装包）、register.ps1、verify-install.ps1、
+│                   gen_icons.py、验收/截图脚本
+└─ tests/           gen_fixtures.py（aapt2 造真实包）、verify_*.py（交叉校验）、验收工具
 ```
 
-## 快速上手（M1 已可跑）
+## 快速上手
 
 ```bat
-:: 1) 构建（需要 VS 2022/2026 的 MSVC，脚本里写死了 vcvarsall 路径，换机器改 tools\build.cmd）
-tools\build.cmd Release                :: 产物在 out\x64\{apkthumb.dll, apkinfo.exe, thumbtest.exe}
+:: 1) 构建（需要 VS 的 MSVC，脚本里写死了 vcvarsall 路径，换机器改 tools\build.cmd）
+tools\build.cmd Release                :: 产物在 out\x64\{apkthumb.dll, apkprop.dll, apkinfo.exe, ...}
 
-:: 2) 造测试包（需要 Android SDK 的 aapt2 + android.jar；路径可用 AAPT2 / ANDROID_JAR 覆盖）
-python tests\gen_fixtures.py
+:: 2) 图标（一次性；已入库，除非改了生成脚本）
+uv run --with pillow python tools\gen_icons.py
 
-:: 3) 签名夹具 + 与 apksigner / aapt2 的交叉校验（需要 SDK 的 apksigner、aapt2、keytool）
-python tests\gen_signed_fixtures.py
-python tests\verify_signature.py --glob "tests\fixtures\generated\signed\*.apk"
-python tests\verify_apkinfo.py tests\fixtures\generated\*.apk
+:: 3) 出安装包（需要 Inno Setup 6；ISCC 路径可用环境变量 ISCC 覆盖）
+tools\pack.cmd                         :: 产物 out\dist\apk-shell-ext-setup-1.0.0.exe
 
-:: 3b) 多 APK 容器（.xapk/.apks/.apkm，M4a）：坏容器夹具 + 与 aapt2 交叉校验
-python tests\gen_container_fixtures.py --real tests\fixtures\real\*.xapk
-python tests\verify_container.py "tests\fixtures\real\*.xapk"
+:: 4) 装（零 UAC，只给当前用户）/ 卸
+out\dist\apk-shell-ext-setup-1.0.0.exe
+"%LOCALAPPDATA%\Programs\apk-shell-ext\unins000.exe"
 
-:: 3c) 鸿蒙 HAP（M4d）：没有官方 CLI，直接对包里的 module.json 交叉校验
-python tests\verify_hap.py tests\fixtures\real\*.hap
-
-:: 4) 单元验收（直接驱动 provider，不依赖 explorer）
-out\x64\thumbtest.exe --probe tests\fixtures\generated\f_png.apk
-out\x64\thumbtest.exe --file  tests\fixtures\generated\f_webp.apk --out C:\tmp\w.png
-out\x64\thumbtest.exe --dir   tests\fixtures\generated --repeat 3 --json
-
-:: 5) 注册（免 UAC，写 HKCU\Software\Classes；默认 .apk/.xapk/.apks/.apkm/.hap）→ 资源管理器切"大图标"即可看到包内图标
+:: 4b) 或者不装，就地注册当前 out\x64（开发调试用，写 HKCU）
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Install
-out\x64\thumbtest.exe --shell --file D:\somewhere\app.apk     :: 走 Explorer 同一条管线
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 ```
 
-诊断日志：存在 `%TEMP%\apk-shell-ext.debug.on` 时写 `%LOCALAPPDATA%\apk-shell-ext\apkthumb.log`。
-清缓存：`out\x64\thumbtest.exe --clean-cache`。
+**造测试包 / 验收**（真实样本 `tests\fixtures\real\` 与 `generated\` 都不入库）：
+
+```bat
+python tests\gen_fixtures.py                              :: 4 正常 + 8 坏包（需 aapt2 + android.jar）
+python tests\gen_signed_fixtures.py                        :: v1/v2/v3 三个签名夹具
+python tests\gen_big_arsc.py                               :: 19.7 MB 真 arsc + deflate 变体
+python tests\gen_container_fixtures.py --real <xapk>       :: 坏容器 / 坏 HAP
+
+python tests\verify_apkinfo.py tests\fixtures\generated\*.apk                    :: 6/6
+python tests\verify_apkinfo.py tests\fixtures\real\*.apk                         :: 3/3
+python tests\verify_signature.py --glob "tests\fixtures\generated\signed\*.apk"   :: 3/3
+python tests\verify_container.py "tests\fixtures\real\*.xapk"                    :: 2/2
+python tests\verify_hap.py "tests\fixtures\real\*.hap"                           :: 2/2
+out\x64\propsheet_model_test.exe --selftest                                      :: 71 ok / 0 fail
+out\x64\thumbtest.exe --dir tests\fixtures\generated --repeat 1 --json           :: 1 个预期失败
+out\x64\thumbtest.exe --shell --file <pkg>                                       :: 走 Explorer 同一条管线
+
+:: 安装器验收（装前快照 -> 装 -> 断言 -> 卸 -> 断言 -> 快照 diff 必须为空）
+powershell -File tools\verify-install.ps1 -Phase snapshot -Path a.txt
+out\dist\apk-shell-ext-setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+powershell -File tools\verify-install.ps1 -Phase check -State installed
+"%LOCALAPPDATA%\Programs\apk-shell-ext\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
+powershell -File tools\verify-install.ps1 -Phase check -State removed
+powershell -File tools\verify-install.ps1 -Phase snapshot -Path b.txt
+powershell -File tools\verify-install.ps1 -Phase diff -A a.txt -B b.txt
+```
+
+诊断与维护（装好之后，入口只有一个 exe）：
+
+```bat
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --status
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --diag on|off|status|clear
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --clear-cache | --cache-info
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --lang zh|en|auto
+```
+
+日志：存在 `%TEMP%\apk-shell-ext.debug.on` 时写 `%LOCALAPPDATA%\apk-shell-ext\apkthumb.log`。
 
 ## 文档索引
 
@@ -83,121 +114,86 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 | --- | --- |
 | [docs/design.md](docs/design.md) | **设计出发点**：调用频率、进程边界、冷热分离、可度量、既有方案实测 |
 | [docs/architecture.md](docs/architecture.md) | 组件与进程边界、三个产物契约、JSON schema、注册表契约、缓存 |
-| [docs/formats.md](docs/formats.md) | APK/XAPK/HAP 的容器与图标位置矩阵、安全限额（AAB/IPA/APPX 按 ADR-0006 不做，结构保留备查） |
-| [docs/roadmap.md](docs/roadmap.md) | **实现阶段 M0–M5**、每阶段交付/验收/退出条件、风险登记 |
-| [docs/verification.md](docs/verification.md) | 把「无感」变成可测判据：ProcMon 配方、耗时与内存预算、记录表（R-0002 = M1 实测） |
-| [docs/m3-property-page.md](docs/m3-property-page.md) | **M3 属性页**：设计方案（已评审）+ 实施记录（`IShellExtInit` 硬要求、图标退路、实测数字） |
-| [docs/adr/](docs/adr/README.md) | 架构决策记录（6 条；0001–0004 冻结，0005 由 M1 实测得出，0006 是格式范围收敛） |
+| [docs/formats.md](docs/formats.md) | APK/XAPK/HAP 的容器与图标位置矩阵、安全限额（AAB/IPA/APPX 按 ADR-0006 不做） |
+| [docs/roadmap.md](docs/roadmap.md) | **实现阶段 M0–M5** 与每阶段的实施记录、风险、技术债 |
+| [docs/verification.md](docs/verification.md) | 验收判据、可复现配方、**R-0001 ~ R-0014 记录表**（含未验证项） |
+| [docs/m3-property-page.md](docs/m3-property-page.md) | M3 属性页设计与实施记录（`IShellExtInit` 硬要求、图标退路、实测数字） |
+| [docs/m5-delivery.md](docs/m5-delivery.md) | **M5 交付**：安装器 / 图标 / VERSIONINFO / i18n / 命令、实测数字、未做清单 |
+| [docs/install.md](docs/install.md) | 用户手册（装/卸/静默/便携/FAQ）——**会随安装包落地到安装目录** |
+| [docs/adr/](docs/adr/README.md) | 架构决策记录（7 条；0007 = 用 Inno Setup + 按用户安装） |
 
 ## 当前状态
 
-**M1 已完成（2026-11-03）**：`.apk` 缩略图闭环全部落地——CMake/Ninja 工程（`/MT`、`/W4 /WX`）、
-`apkthumb.dll`（285 KB，只导入系统 DLL；M2 加流式 arsc 后 301 KB）、`tools\register.ps1`（HKCU 免 UAC，卸载零残留）、
-自建正/负缓存、`tests\thumbtest.exe` 验收工具、`tests\gen_fixtures.py`（aapt2 造真实包）。
+**M1（2026-11-03）**：`.apk` 缩略图闭环——CMake/Ninja（`/MT`、`/W4 /WX`）、`apkthumb.dll`（只导入系统 DLL）、
+`tools\register.ps1`（HKCU 免 UAC、卸载零残留）、自建正/负缓存、`tests\thumbtest.exe`、`tests\gen_fixtures.py`。
+实测：100 个包冷 P50 8.2 ms / P95 14.9 ms，热 P50 1.3 ms；真实 Explorer 管线冷 12–21 ms。
+**关键意外**：缩略图 handler 跑在 `dllhost.exe` 隔离宿主里，且只通过 `IInitializeWithStream` 喂数据
+（只实现 `IInitializeWithItem` 时系统返回 `0x8004B200`）→ 解析核心改成数据源无关，见 [ADR-0005](docs/adr/0005-isolated-thumbnail-host-and-stream-input.md)。
 
-**实测数字**（[verification.md §10](docs/verification.md)）：100 个包冷 P50 8.2 ms / P95 14.9 ms，热 P50 1.3 ms；
-走真实 Explorer 管线（`--shell`，经 dllhost）冷 12–21 ms、热 < 3 ms；8 个坏包全部优雅失败、进程不崩。
+**M2（2026-11-04）**：`apkinfo.exe --json`（schema v1）、ARSC 分段流式（TD-001 关闭：19.7 MB 真表 0.7–1.5 ms）、
+签名块 v1/v2/v3（与 apksigner 22/22）、`features`、`--hash=sha256`（与 certutil 一致）、退出码 0/2/3、8 s watchdog；
+与 `aapt2 dump badging` 11/11 一致。
 
-**M1 的关键意外**：缩略图 handler 并不在 explorer.exe 里跑，而是被放进 `dllhost.exe` 隔离宿主，
-且只通过 `IInitializeWithStream` 喂数据（只实现 `IInitializeWithItem` 时系统返回 `0x8004B200`）。
-这迫使解析核心改成"数据源无关"（文件 / 流），并加了一条带中央目录摘要的缓存键——见
-[ADR-0005](docs/adr/0005-isolated-thumbnail-host-and-stream-input.md)。
+**M3（2026-11-04）**：`apkprop.dll` 单页（**原生控件**：STATIC 头 + SysListView32 两列分组 + BUTTON 底栏；
+权限/特性可折叠、默认收起；配色/深色跟随宿主）。`AddPages` 零 IO → 线程 → Job 里的 `apkinfo.exe` → `WM_APP` 回填；
+关窗即 `TerminateJobObject`。7.9 MB 包 140–188 ms 出全页，1.79 GB 包 157 ms，按需 SHA-256 172 ms。
+**计划外发现**：这个 build 在建页前先 `QI(IShellExtInit)`，缺了会被静默跳过 → 已补
+（[m3-property-page.md §14](docs/m3-property-page.md)）。
 
-**M3 已完成（2026-11-04，记录 [verification.md R-0006](docs/verification.md)）**
+**M4（2026-11-04）**：`.xapk/.apks/.apkm`（外层 ZIP + 内层 base.apk，Stored 的 base 走零拷贝窗口——
+1.25 GB 的 PUBG 只读 107 MB）+ 鸿蒙 `.hap`（`module.json` + `$media:` 三级启发式 + `resources.index` 解应用名）。
+`container` / `hap` 块进 JSON，属性页有「分包 · N 项」「安装包类型」等。其余格式按
+[ADR-0006](docs/adr/0006-format-scope-cut.md) 不做。
 
-`apkprop.dll`：右键属性里的「安装包信息」单页，**原生控件**（STATIC 头 + SysListView32 两列分组 + BUTTON 底栏，
-样式/深色/选中/无障碍都交给系统；`权限`、`特性` 两组可折叠、默认收起）；
-底色/文字/字体全部向属性窗口本身与系统色要，所以页内永远和窗口同风格（系统深色时也是浅色）。
-重绘走双缓冲 + 脏矩形（hover 只重画 1–2 行），快速划过不闪；tooltip 悬停停留后才出，且只在该行真被截断时出。
-`AddPages` 零 IO，`PSM_INITDIALOG` 之后起线程 → `apkinfo.exe`（挂在带 `KILL_ON_JOB_CLOSE` 的 Job 上）→
-JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJobObject`。
-实测：7.9 MB 包 **140–188 ms** 出全页，1.79 GB 包 **157 ms**，按需 SHA-256 172 ms（1.9 GB 约 1.2 s），
-关闭时正在算哈希 ×3 次无残留进程。
+**M5（2026-11-04，记录 [verification.md R-0014](docs/verification.md)｜设计 [m5-delivery.md](docs/m5-delivery.md)）**
 
-**计划外发现**：这个 Windows build 在建页之前先 `QI(IShellExtInit)`，只实现 `IShellPropSheetExt + IPersistFile`
-的 handler 会被**静默跳过**（`AddPages` 根本不会被调用）。已补 `IShellExtInit::Initialize`，见
-[docs/m3-property-page.md §14](docs/m3-property-page.md)。
+- **安装器换成 Inno Setup**（[ADR-0007](docs/adr/0007-inno-setup-per-user-install.md)）：默认**按用户装、零 UAC**
+  （`%LOCALAPPDATA%\Programs\apk-shell-ext` + `HKCU\Software\Classes`），勾"为所有用户安装"或 `/ALLUSERS`
+  才要一次 UAC。实测 `/VERYSILENT` 装 → `verify-install.ps1` 全绿 → `unins000.exe` 卸 → 残留检查 ok、
+  装前/卸后快照 **diff 为 0**。自研的 `apkinst.exe`（约 1100 行）已删除，教训写进 m5-delivery.md §1。
+- **三枚格式图标**（`icons\{apk,apks,hap}.ico`，16/24/32/48/256 各档独立绘制）+ `DefaultIcon` 注册：
+  列表视图 16 px 下绿机器人 / 靛紫双卡 / 红六边形三族可分辨（`docs/evidence/m5-defaulticons-list-zoom.png`）。
+- **VERSIONINFO 1.0.0.0**（四个二进制，en-US + zh-CN 双块）；`APKSX_PARSER_VERSION` 升到 `m5`，旧缩略图缓存自动失效。
+- **装好之后的命令都并入 `apkinfo.exe`**：`--status / --diag / --clear-cache / --cache-info / --lang`。
+- **中英双语**：`src/core/i18n.{h,cpp}`（界面 77 条 + 解析器错误字典约 60 条），语言顺序
+  `UiLanguage`(HKCU) → `APKSX_LANG` → 系统语言；属性页中英各截一张
+  （`m5-propsheet-zh.png` / `m5-propsheet-en.png`），model 单测 60 → 71 ok。
+- **`IExtractIcon` 结论：不做**（ADR-0001 不修订）。
 
-**M2 已完成的六件（2026-11-04）**
+## 下一步（v1 之后的待办，按价值排序）
 
-1. `apkinfo.exe --json`（schema v1 的 `file`/`app`/`icon`/`components`/`permissions`/`diagnostics`），
-   label 走 arsc 解析，`--hash=sha256` 与 `certutil` 一致，退出码 0/2/3 与 8 s watchdog 均实测。
-2. **TD-001 关闭**：`resources.arsc` 改为在 Stored 条目上开窗口流式跳读；19.7 MB 真表 0.7–1.5 ms。
-3. 大包测速：1.26 GB / 1.92 GB 的真包解析 3.8–6.9 ms，缩略图 37–41 ms（经 dllhost 172 ms）。
-4. 与 `aapt2 dump badging` 逐字段交叉校验 **11/11 一致**（含混淆包、自适应图标包、GB 级包）。
-5. **签名块**：v1（`META-INF/*.RSA|DSA|EC` 的 PKCS#7）+ v2/v3/v3.1（APK Signing Block）方案识别与证书 SHA-256；
-   自造 v1-only / v2-only / v3-only 三个夹具，与 `apksigner verify --print-certs` **22/22 一致**。
-   注意 `scheme` 的语义是"检测到的签名块"而非"校验通过"（见 [architecture.md §2.3](docs/architecture.md)）。
-6. `features`（`uses-feature` + `android:required`）→ 与 aapt2 **11/11 一致**。
+1. **代码签名**（OV/EV 待定，见 design.md §8）：v1 无证书，SmartScreen 会提示"未知发布者"。
+2. **`/ALLUSERS` 整机安装实跑一次**：`.iss` 的提权分支只做了静态审阅（自动化里弹 UAC 会卡会话）。
+3. **修 `proptest.exe`**：本机（Windows 11 26300）`PropertySheetW` 立即返回 −1，换 M4 旧 DLL 同样失败；
+   在修好之前，属性页验收用真实资源管理器对话框截图。
+4. **ProcMon 复跑 V1/V9**：M5 没改缩略图代码路径、`DefaultIcon` 纯静态，但仍应测一次"0 次 CreateFile"。
+5. HAP 增强（非阻塞）：layered icon 合成、`$media:<id>` 的 id→文件名映射、`.hsp`/`.app` 套件、HAP 签名块。
+6. TD-002（deflate 的大 arsc）；V8 恶意样本回归；长跑（句柄 / 负缓存过期）。
+7. 用户已明确挂起（2026-11-04）：真实 150%/200% DPI 人眼确认。
 
-**M4a 已完成（2026-11-04，记录 [verification.md R-0011](docs/verification.md)）**
+## 接力说明（下一会话从这里开始，2026-11-04 收口）
 
-`.xapk/.apks/.apkm`（外层 ZIP + 内层 base.apk）走同一条解析路径：`src/core/package.cpp` 先判容器，
-Stored 的 base 用 `SliceSource` 在外层文件上开窗口（**1.25 GB 的 PUBG xapk 只读 107 MB 的 base**），
-deflate 的 base 整块解压且上限 512 MB。JSON 新增 `container` 块（`base` + `splits`）；
-属性页多出「安装包类型」「内层 APK」两行与可折叠「分包 · N 项」组；`register.ps1` 默认注册四个扩展名（M4d 又加了 `.hap`，共五个）。
-实测：Poweramp xapk 缩略图 24 ms（经 shell 110 ms）、属性页 188–282 ms；
-PUBG（1.25 GB）缩略图 35/20 ms（冷/热）、worker 9.5–12.4 ms；2/2 与 aapt2 一致；4 个坏容器全部优雅失败。
-**注意**：`.apks`（bundletool）与 `.apkm`（APKMirror）只有启发式 + 坏样本，没有真实样本验证。
+当前状态一句话：**M0–M5 全部收口**，`apk-shell-ext-setup-1.0.0.exe` 可装可用，装/卸零残留已验证；
+剩下的都是"锦上添花 + 补测"，没有阻塞项。
 
-**M4d 已完成（2026-11-04，记录 [verification.md R-0012](docs/verification.md)）**
-
-鸿蒙 `.hap`：`module.json`（JSON）直读（`src/core/hap.cpp`），判定放在 APK/容器之前；
-图标走 `$media:` 三级启发式（名字 → layered json 的 `foreground`/`background` 键名 → `startWindowIcon`/约定名/最大 PNG）。
-JSON 新增 `hap` 块（模块 / 主 Ability / min-targetAPI / 编译 SDK / 设备类型 / Ability 计数 / labelRef），
-**不把鸿蒙 API 号塞进 `app.minSdk/targetSdk`**；属性页有模块/API/设备类型/Ability/权限，签名行直接写"未实现"。
-**应用名**：`$string:` 引用现在会去 `resources.index`（RestoolV2）取默认配置的值，优先用 `mainElement` 那个 Ability 的 `label`
-（鸿蒙桌面显示的就是它）——实测 `刷题宝`、`LibreTV`，与独立 Python 解析器交叉校验 2/2。
-实测：两个 HAP 与 `module.json` 交叉校验 2/2、缩略图 41 ms（经 shell 87/61 ms）、属性页 156 ms、worker < 2 ms。
-**未实现**（信息页对这类功能一律直接写"未实现"，不解释原因）：layered 合成、HAP 签名块、`.hsp`/`.app` 套件。
-
-**下一步（建议顺序）**
-
-1. M5 交付打磨：安装器（一次 UAC）、VERSIONINFO、三枚格式差异化 ico、诊断开关、中英文、缓存清理。
-2. HAP 增强（可选，非阻塞）：layered icon 合成（前景+背景叠加）、`$media:<id>` 的 id→文件名映射、`.hsp`/`.app` 套件。
-3. 已明确不做：[ADR-0006](docs/adr/0006-format-scope-cut.md) 收敛掉 `.aab/.ipa/.appx/.msix`。
-4. M3 / M2 尾巴（用户 2026-11-04 明确说"算边缘情况，等遇到问题再说"）：真实 150%/200% 人眼确认、
-   TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
-
-**接力说明**（下一会话从这里开始，2026-11-04 收口）
-
-当前状态一句话：**M0–M4 全部收口**（M4 = `.xapk/.apks/.apkm` + `.hap`，其余格式按
-[ADR-0006](docs/adr/0006-format-scope-cut.md) 不做），下一个里程碑是 **M5 交付打磨**。
-
-- **构建**：`tools\build.cmd Release` → `out\x64\{apkthumb.dll, apkprop.dll, apkinfo.exe, thumbtest.exe, proptest.exe}`。
-  坑：`apkprop.dll` 被 explorer 占用时链接会 `LNK1104`——先 `Stop-Process -Name explorer -Force` 再编，编完 explorer 会自启。
-- **人造夹具**（可随时重造，不入库）：`tests\gen_fixtures.py`（4 正常 + 8 坏包）、`tests\gen_signed_fixtures.py`、
-  `tests\gen_big_arsc.py`（19.7 MB 真 arsc + deflate 变体）、`tests\gen_container_fixtures.py --real <xapk>`
-  （4 个坏容器 + 3 个坏 HAP）。
-- **真实样本**（`tests\fixtures\real\`，**gitignore**）：3 个普通 APK（aida64 / qwxds / wwlocation-probe）、
-  2 个 `.xapk`（Poweramp 22 MB；PUBG 1.25 GB）、2 个 `.hap`（ShuaTiBao108、entry-default-unsigned）、
-  `big\`（1.26 G / 1.92 G）。换机器时这些要重新准备，其它夹具都能脚本重造。
-- **验收全套**（按顺序跑，全绿才算没退化）：
-
-  ```
-  python tests\verify_apkinfo.py tests\fixtures\generated\*.apk        :: 6/6
-  python tests\verify_apkinfo.py tests\fixtures\real\*.apk             :: 3/3
-  python tests\verify_signature.py --glob "tests\fixtures\generated\signed\*.apk"  :: 3/3
-  python tests\verify_container.py "tests\fixtures\real\*.xapk"        :: 2/2
-  python tests\verify_hap.py "tests\fixtures\real\*.hap"               :: 2/2（含应用名交叉校验）
-  out\x64\propsheet_model_test.exe --selftest                              :: 60 ok / 0 fail（含布局 20,832 组合）
-  out\x64\thumbtest.exe --dir tests\fixtures\generated --repeat 1 --json  :: 1 个预期失败（f_noicon.apk）
-  out\x64\thumbtest.exe --shell --file <pkg>                               :: 走 Explorer 管线
-  ```
-
-- **注册状态**：HKCU 已注册 `.apk/.xapk/.apks/.apkm/.hap`（缩略图 + 属性页）。
-  `powershell -File tools\register.ps1 -Uninstall` 可完全撤除；
-  诊断日志需手动建 `%TEMP%\apk-shell-ext.debug.on`。
-- **明确的未实现清单**（信息页对这类功能一律直接写"未实现"，不解释原因）：
-  HAP 签名块、layered icon 合成（只取 foreground）、`$media:<id>` 的 id→文件名映射、`.hsp`/`.app` 套件、
-  HAP 多语言/限定词（只取默认配置）、Restool v1 老索引。
-- **已被用户明确挂起**（2026-11-04："算边缘情况，等遇到问题再说"）：真实 150%/200% DPI 人眼确认、
-  TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
-- **下一会话建议起手**：M5 —— 安装器（一次 UAC）+ VERSIONINFO + 三枚格式差异化 ico（APK/XAPK/HAP）+
-  诊断开关 + 中英文 + 缓存清理工具；HAP 的两件"锦上添花"（layered 合成、id→文件名）可以穿插做。
+- **构建**：`tools\build.cmd Release` → `out\x64\{apkthumb.dll, apkprop.dll, apkinfo.exe, thumbtest.exe,
+  proptest.exe, propsheet_model_test.exe}`。坑：`apkprop.dll` 被 explorer 占用时链接会 `LNK1104`——
+  先 `Stop-Process -Name explorer -Force` 再编，编完 explorer 会自启。
+- **打包**：`tools\pack.cmd`（内部 ISCC，本机 `E:\PROGRAMS\Inno Setup 6`；换机器设 `%ISCC%`）→ `out\dist\`。
+- **夹具**：`tests\gen_*.py` 可随时重造（不入库）；真实样本在 `tests\fixtures\real\`（gitignore），
+  换机器要重新准备：3 个普通 APK（aida64 / qwxds / wwlocation-probe）、2 个 `.xapk`
+  （Poweramp 22 MB；PUBG 1.25 GB）、2 个 `.hap`（ShuaTiBao108、entry-default-unsigned）、`big\`（1.26 G / 1.92 G）。
+- **验收全套**：见上面「快速上手」里的命令块，**加上** `verify-install.ps1` 的装/卸/快照三步。
+- **本机当前状态**：已用安装器按用户装好（`%LOCALAPPDATA%\Programs\apk-shell-ext`），
+  `UiLanguage` 恢复 `auto`（= 中文），图标缓存清过。要回到"干净机器"就 `unins000.exe`。
+- **改图标/换 DLL 后**：删 `%LOCALAPPDATA%\IconCache.db` 与
+  `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db` 并重启资源管理器，否则看的是旧图（踩过）。
+- **改文案**：界面文案只改 `src/core/i18n.cpp` 的表；解析器错误保留 core 里的中文原文，
+  由 `TrMsg` 字典在 worker 出口翻译。`propsheet_model_test --selftest` 会钉住中文断言。
 
 ## 变更纪律（写给自己）
 
 1. 每条技术断言要能指到出处：实测（二进制/注册表/ProcMon）、官方文档或对方源码。文档里不写"据说"。
 2. 任何影响调用频率或进程边界的改动，先写 ADR 再改代码。
 3. 每阶段结束在 `docs/verification.md` 追加一条记录（含命令与结论），未验证项单列，不许含糊。
+4. 安装/卸载行为属于交付契约：改了必须同步 `docs/install.md`（它会随安装包发给用户）与 `verify-install.ps1`。

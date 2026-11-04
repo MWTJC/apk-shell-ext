@@ -33,3 +33,8 @@ __pycache__/
 
 # build logs
 *.log
+
+# 本会话的临时目录（快照/截图/日志）
+.tmp/
+# 图标生成脚本的预览拼版（证据图另存 docs/evidence）
+icons/_preview.png

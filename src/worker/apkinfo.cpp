@@ -17,6 +17,9 @@
 #include "core/apk_info.h"
 #include "core/common.h"
 #include "core/file_util.h"
+#include "core/i18n.h"
+#include "core/thumb_cache.h"
+#include "worker/support.h"
 
 namespace {
 
@@ -405,7 +408,46 @@ void WriteStderr(const std::string& utf8) {
 void PrintUsage() {
   std::fwprintf(stderr,
                 L"usage: apkinfo --json [--schema=1] [--hash=sha256] [--pretty]\n"
-                L"               [--timeout=<seconds>] <file>\n");
+                L"               [--timeout=<seconds>] <file>\n"
+                L"       apkinfo --clear-cache [--cache-info]\n"
+                L"       apkinfo --status | --diag on|off|status|clear\n");
+}
+
+// 缓存清理（M5）：缩略图缓存是自建的，卸载后也要能一键清空，所以放在会随安装一起装上的 worker 里。
+// 规则与粗粒度一致：只动 %LOCALAPPDATA%\apk-shell-ext\thumbs 下的文件（ThumbCache::ClearAll）。
+int DoCacheCommand(bool clear, bool info) {
+  uint64_t removed = 0;
+  std::wstring dir = apksx::ThumbCache::RootDir();
+  if (clear) {
+    if (!apksx::ThumbCache::ClearAll(&removed)) {
+      std::fwprintf(stderr, L"apkinfo: cache directory unavailable\n");
+      return 4;
+    }
+    std::printf("cleared %llu bytes\n", static_cast<unsigned long long>(removed));
+  }
+  if (info) {
+    uint64_t total = 0;
+    uint32_t files = 0;
+    if (!dir.empty()) {
+      WIN32_FIND_DATAW fd{};
+      HANDLE h = ::FindFirstFileW(apksx::JoinPath(dir, L"*").c_str(), &fd);
+      if (h != INVALID_HANDLE_VALUE) {
+        do {
+          if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
+          total += (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+          ++files;
+        } while (::FindNextFileW(h, &fd));
+        ::FindClose(h);
+      }
+    }
+    std::printf("%u files, %llu bytes in ", files, static_cast<unsigned long long>(total));
+    std::printf("%s\n", dir.empty() ? "(no cache dir)" : "");
+    if (!dir.empty()) {
+      std::string utf8;
+      if (apksx::WideToUtf8(dir, &utf8)) std::printf("%s\n", utf8.c_str());
+    }
+  }
+  return 0;
 }
 
 }  // namespace
@@ -415,6 +457,9 @@ int wmain(int argc, wchar_t** argv) {
   (void)com;
 
   Options opt;
+  bool clear_cache = false;
+  bool cache_info = false;
+  std::wstring diag_action;
   for (int i = 1; i < argc; ++i) {
     const std::wstring arg = argv[i];
     if (arg == L"--json") {
@@ -428,12 +473,39 @@ int wmain(int argc, wchar_t** argv) {
     } else if (arg.rfind(L"--timeout=", 0) == 0) {
       opt.timeout_seconds = _wtoi(arg.c_str() + 10);
       if (opt.timeout_seconds <= 0) opt.timeout_seconds = 8;
+    } else if (arg == L"--clear-cache") {
+      clear_cache = true;
+    } else if (arg == L"--cache-info") {
+      cache_info = true;
+    } else if (arg == L"--status") {
+      ::CoUninitialize();
+      return apksx::RunStatusCommand();
+    } else if (arg.rfind(L"--diag=", 0) == 0) {
+      ::CoUninitialize();
+      return apksx::RunDiagCommand(arg.substr(7));
+    } else if (arg == L"--diag") {
+      diag_action = (i + 1 < argc) ? argv[++i] : L"status";
+    } else if (arg.rfind(L"--lang=", 0) == 0) {
+      ::CoUninitialize();
+      return apksx::RunLangCommand(arg.substr(7));
+    } else if (arg == L"--lang") {
+      ::CoUninitialize();
+      return apksx::RunLangCommand((i + 1 < argc) ? argv[++i] : L"auto");
     } else if (!arg.empty() && arg[0] == L'-') {
       PrintUsage();
       return 4;
     } else {
       opt.file = arg;
     }
+  }
+  if (!diag_action.empty()) {
+    ::CoUninitialize();
+    return apksx::RunDiagCommand(diag_action);
+  }
+  if (clear_cache || cache_info) {
+    const int code = DoCacheCommand(clear_cache, cache_info);
+    ::CoUninitialize();
+    return code;
   }
   if (opt.file.empty()) {
     PrintUsage();
@@ -479,7 +551,9 @@ int wmain(int argc, wchar_t** argv) {
 
   if (!ok) {
     std::string message;
-    if (!apksx::WideToUtf8(err.message.empty() ? L"解析失败" : err.message, &message)) {
+    const std::wstring text =
+        apksx::TrMsg(err.message.empty() ? L"解析失败" : err.message);
+    if (!apksx::WideToUtf8(text, &message)) {
       message = "parse failed";
     }
     WriteStderr(std::string("apkinfo: ") + message);

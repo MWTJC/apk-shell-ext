@@ -1,5 +1,7 @@
 #include "propsheet/page_list.h"
 
+#include "core/i18n.h"
+
 #include <commctrl.h>
 #include <shlwapi.h>  // DLLVERSIONINFO / DllGetVersion
 
@@ -118,7 +120,7 @@ void PopulateListView(HWND list, const PageModel& model) {
     ++group_id;
   }
   if (groups_supported && !model.warnings.empty()) {
-    AddGroup(list, group_id, L"诊断", false);
+    AddGroup(list, group_id, Tr(Str::DiagGroup), false);
     for (const std::wstring& warning : model.warnings) {
       AddRow(list, group_id, 0, L"", warning.c_str());
     }

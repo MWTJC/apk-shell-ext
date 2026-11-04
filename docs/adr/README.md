@@ -5,12 +5,13 @@
 
 | 编号 | 决策 | 状态 | 影响阶段 |
 | --- | --- | --- | --- |
-| [0001](0001-thumbnail-provider-only.md) | 缩略图只挂 `IThumbnailProvider`，v1 不挂 `IExtractIcon` | 已采纳（M5 可评估修订） | M1 |
+| [0001](0001-thumbnail-provider-only.md) | 缩略图只挂 `IThumbnailProvider`，v1 不挂 `IExtractIcon` | 已采纳（M5 已评估：不修订，见 [m5-delivery.md §6](../m5-delivery.md)） | M1 |
 | [0002](0002-lazy-metadata-and-banned-handlers.md) | 元数据只走属性页；**禁止** `IPropertyStore` / 列 / 预览 / Infotip | 已采纳（禁止项） | M3 |
 | [0003](0003-out-of-proc-parser.md) | 全量解析放独立 worker 进程，DLL 只做 UI/IPC | 已采纳 | M2/M3 |
 | [0004](0004-stack-and-dependency-boundary.md) | C++20 / MSVC / CMake / 静态 CRT / WTL；禁止 MFC、Qt、.NET、自有解码器 | 已采纳（禁止项） | M1 |
 | [0005](0005-isolated-thumbnail-host-and-stream-input.md) | 缩略图在 dllhost 隔离宿主里跑、输入是 IStream；解析核心改为 ByteSource，流模式缓存键含中央目录摘要 | 已采纳（M1 实测得出） | M1 |
 | [0006](0006-format-scope-cut.md) | 格式范围收敛：只支持 `.apk/.xapk/.apks/.apkm/.hap`，**不做** `.aab/.ipa/.appx/.msix` | 已采纳（2026-11-04） | M4 |
+| [0007](0007-inno-setup-per-user-install.md) | 安装/分发用 Inno Setup 6；默认按用户装（零 UAC），`/ALLUSERS` 才一次 UAC；注册表根用 `HKA`；装好之后的命令并入 `apkinfo.exe` | 已采纳（2026-11-04） | M5 |
 
 ## 写作规则
 

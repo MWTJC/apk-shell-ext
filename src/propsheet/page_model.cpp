@@ -7,6 +7,8 @@
 #include <cwchar>
 #include <cwctype>
 
+#include "core/i18n.h"
+
 namespace apksx {
 namespace {
 
@@ -26,7 +28,7 @@ std::wstring JoinStrings(const std::vector<std::string>& items, const wchar_t* s
   }
   if (items.size() > count) {
     wchar_t tail[48];
-    _snwprintf_s(tail, _TRUNCATE, L"…（共 %zu 项）", items.size());
+    _snwprintf_s(tail, _TRUNCATE, Tr(Str::TruncatedTail), items.size());
     out += tail;
   }
   return out;
@@ -57,7 +59,7 @@ std::wstring FormatBytes(uint64_t bytes) {
     }
   }
   wchar_t both[96];
-  _snwprintf_s(both, _TRUNCATE, L"%s（%s 字节）", human, grouped.c_str());
+  _snwprintf_s(both, _TRUNCATE, Tr(Str::BytesGrouped), human, grouped.c_str());
   return both;
 }
 
@@ -135,7 +137,7 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   if (out == nullptr) return false;
   *out = PageModel();
   if (!doc.is_object()) {
-    if (err != nullptr) err->set(L"解析输出不是 JSON 对象");
+    if (err != nullptr) err->set(Tr(Str::OutputNotObject));
     return false;
   }
   {
@@ -181,60 +183,60 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
 
   // ---------------------------------------------------------------- 应用
   PageGroup apply;
-  apply.title = L"应用";
-  AddRow(&apply, L"应用名", out->label);
-  AddRow(&apply, L"包名", out->package);
-  AddRow(&apply, L"版本", version_value);
+  apply.title = Tr(Str::GroupApp);
+  AddRow(&apply, Tr(Str::AppName), out->label);
+  AddRow(&apply, Tr(Str::Package), out->package);
+  AddRow(&apply, Tr(Str::Version), version_value);
   {
     const std::vector<std::string> locales = StringArray(app, "locales");
     if (!locales.empty()) {
       wchar_t head[48];
-      _snwprintf_s(head, _TRUNCATE, L"%zu 种 · ", locales.size());
-      AddRow(&apply, L"语言", std::wstring(head) + JoinStrings(locales, L", ", 6));
+      _snwprintf_s(head, _TRUNCATE, Tr(Str::LocalesHead), locales.size());
+      AddRow(&apply, Tr(Str::Locales), std::wstring(head) + JoinStrings(locales, L", ", 6));
     }
   }
   if (!apply.rows.empty()) out->groups.push_back(std::move(apply));
 
   // ---------------------------------------------------------------- 技术
   PageGroup tech;
-  tech.title = L"技术";
+  tech.title = Tr(Str::GroupTech);
   {
     // 鸿蒙 HAP（M4d）：模块/API/编译 SDK/设备类型取代 APK 那套 SDK 语义
     if (hap != nullptr && hap->is_object()) {
       const std::wstring module = StrField(hap, "module");
       const std::wstring type = StrField(hap, "type");
       if (!module.empty()) {
-        AddRow(&tech, L"模块", type.empty() ? module : module + L"（" + type + L"）");
+        AddRow(&tech, Tr(Str::Module), type.empty() ? module : module + L"（" + type + L"）");
       }
       const std::wstring main_ability = StrField(hap, "mainAbility");
-      if (!main_ability.empty()) AddRow(&tech, L"主 Ability", main_ability);
+      if (!main_ability.empty()) AddRow(&tech, Tr(Str::MainAbility), main_ability);
       const uint32_t min_api = UintField(hap, "minAPI");
       const uint32_t target_api = UintField(hap, "targetAPI");
       if (min_api != 0 || target_api != 0) {
         wchar_t buf[80];
-        _snwprintf_s(buf, _TRUNCATE, L"min %u / target %u", min_api, target_api);
-        AddRow(&tech, L"API 版本", buf);
+        _snwprintf_s(buf, _TRUNCATE, Tr(Str::ApiLine), min_api, target_api);
+        AddRow(&tech, Tr(Str::ApiVersion), buf);
       }
       const std::wstring compile_sdk = StrField(hap, "compileSdk");
-      if (!compile_sdk.empty()) AddRow(&tech, L"编译 SDK", compile_sdk);
+      if (!compile_sdk.empty()) AddRow(&tech, Tr(Str::CompileSdk), compile_sdk);
       const std::vector<std::string> devices = StringArray(hap, "deviceTypes");
-      if (!devices.empty()) AddRow(&tech, L"设备类型", JoinStrings(devices, L", ", 8));
+      if (!devices.empty()) AddRow(&tech, Tr(Str::DeviceTypes), JoinStrings(devices, L", ", 8));
       const uint32_t abilities = UintField(hap, "abilities");
       const uint32_t extensions = UintField(hap, "extensionAbilities");
       if (abilities + extensions > 0) {
         wchar_t buf[64];
         if (extensions == 0) {
-          _snwprintf_s(buf, _TRUNCATE, L"Ability %u", abilities);
+          _snwprintf_s(buf, _TRUNCATE, Tr(Str::ComponentAbility), abilities);
         } else {
-          _snwprintf_s(buf, _TRUNCATE, L"Ability %u · Extension %u", abilities, extensions);
+          _snwprintf_s(buf, _TRUNCATE, Tr(Str::ComponentAbilityExt), abilities, extensions);
         }
-        AddRow(&tech, L"组件", buf);
+        AddRow(&tech, Tr(Str::Components), buf);
       }
     }
     const std::vector<std::string> abis = StringArray(app, "abis");
-    if (!abis.empty()) AddRow(&tech, L"ABI", JoinStrings(abis, L", ", 6));
+    if (!abis.empty()) AddRow(&tech, Tr(Str::Abi), JoinStrings(abis, L", ", 6));
     const std::vector<std::string> densities = StringArray(app, "densities");
-    if (!densities.empty()) AddRow(&tech, L"密度", JoinStrings(densities, L", ", 8));
+    if (!densities.empty()) AddRow(&tech, Tr(Str::Densities), JoinStrings(densities, L", ", 8));
   }
   {
     const uint32_t activities = UintField(comps, "activities");
@@ -244,25 +246,25 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     const bool is_hap = hap != nullptr && hap->is_object();
     if (!is_hap && activities + services + receivers + providers > 0) {
       wchar_t buf[128];
-      _snwprintf_s(buf, _TRUNCATE, L"活动 %u · 服务 %u · 广播 %u · 提供者 %u", activities, services,
-                   receivers, providers);
-      AddRow(&tech, L"组件", buf);
+      _snwprintf_s(buf, _TRUNCATE, Tr(Str::ComponentApk), activities, services, receivers,
+                   providers);
+      AddRow(&tech, Tr(Str::Components), buf);
     }
   }
   {
     const std::wstring source = StrField(icon, "source");
     if (!source.empty()) {
-      AddRow(&tech, L"图标来源", source);
+      AddRow(&tech, Tr(Str::IconSource), source);
       const uint32_t width = UintField(icon, "width");
       const uint32_t height = UintField(icon, "height");
       if (width != 0 && height != 0) {
         wchar_t buf[48];
-        _snwprintf_s(buf, _TRUNCATE, L"%u × %u", width, height);
-        AddRow(&tech, L"图标尺寸", buf);
+        _snwprintf_s(buf, _TRUNCATE, Tr(Str::IconSizeValue), width, height);
+        AddRow(&tech, Tr(Str::IconSize), buf);
       }
       const json::Value* adaptive = Field(icon, "adaptive");
       if (adaptive != nullptr && adaptive->as_bool(false)) {
-        AddRow(&tech, L"图标类型", L"自适应（XML）");
+        AddRow(&tech, Tr(Str::IconType), Tr(Str::IconAdaptive));
       }
     }
   }
@@ -281,7 +283,7 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     if (!names.empty()) {
       PageGroup perms;
       wchar_t buf[64];
-      _snwprintf_s(buf, _TRUNCATE, L"权限 · %zu 项", names.size());
+      _snwprintf_s(buf, _TRUNCATE, Tr(Str::PermissionsTitle), names.size());
       perms.title = buf;
       perms.collapsible = true;  // 分组带带折叠箭头，收起后整段明细隐藏
       for (const std::wstring& name : names) AddRow(&perms, L"", name);
@@ -301,13 +303,14 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
         const json::Value* required_field = Field(item.get(), "required");
         const bool is_required = required_field == nullptr || required_field->as_bool(true);
         if (is_required) ++required;
-        lines.push_back(name + (is_required ? L"（必需）" : L"（可选）"));
+        lines.push_back(name +
+                        (is_required ? Tr(Str::FeatureRequired) : Tr(Str::FeatureOptional)));
       }
     }
     if (!lines.empty()) {
       PageGroup features;
       wchar_t buf[80];
-      _snwprintf_s(buf, _TRUNCATE, L"特性 · %zu 项（%zu 必需）", lines.size(), required);
+      _snwprintf_s(buf, _TRUNCATE, Tr(Str::FeaturesTitle), lines.size(), required);
       features.title = buf;
       features.collapsible = true;
       for (const std::wstring& line : lines) AddRow(&features, L"", line);
@@ -327,11 +330,11 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
         const uint64_t size = Uint64Field(item.get(), "size");
         std::wstring kind = StrField(item.get(), "kind");
         if (kind == L"base") {
-          kind = L"base";
+          kind = Tr(Str::SplitKindBase);
         } else if (kind == L"config") {
-          kind = L"配置";
+          kind = Tr(Str::SplitKindConfig);
         } else {
-          kind = L"分包";
+          kind = Tr(Str::SplitKindOther);
         }
         std::wstring line = L"[" + kind + L"] " + name;
         if (size != 0) line += L"（" + FormatBytes(size) + L"）";
@@ -341,7 +344,7 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     if (!lines.empty()) {
       PageGroup splits;
       wchar_t buf[64];
-      _snwprintf_s(buf, _TRUNCATE, L"分包 · %zu 项", lines.size());
+      _snwprintf_s(buf, _TRUNCATE, Tr(Str::SplitsTitle), lines.size());
       splits.title = buf;
       splits.collapsible = true;
       for (const std::wstring& line : lines) AddRow(&splits, L"", line);
@@ -351,15 +354,15 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
 
   // ---------------------------------------------------------------- 文件与签名
   PageGroup files;
-  files.title = L"文件与签名";
+  files.title = Tr(Str::GroupFiles);
   {
     // 容器类型放最前：.xapk/.apks/.apkm/.hap 时先让人知道"这不是普通 APK"
     if (hap != nullptr && hap->is_object()) {
-      AddRow(&files, L"安装包类型", L"HAP（鸿蒙）");
+      AddRow(&files, Tr(Str::PackageType), Tr(Str::PackageTypeHap));
     }
     if (container != nullptr && container->is_object()) {
       const std::wstring base = StrField(container, "base");
-      if (!base.empty()) AddRow(&files, L"内层 APK", base);
+      if (!base.empty()) AddRow(&files, Tr(Str::InnerApk), base);
       const uint32_t count = UintField(container, "apkCount");
       const std::wstring kind = StrField(container, "kind");
       if (!kind.empty()) {
@@ -367,21 +370,21 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
         for (wchar_t& c : title) c = static_cast<wchar_t>(::towupper(c));
         wchar_t buf[64];
         if (count != 0) {
-          _snwprintf_s(buf, _TRUNCATE, L"%s（%u 个 APK）", title.c_str(), count);
-          AddRow(&files, L"安装包类型", buf);
+          _snwprintf_s(buf, _TRUNCATE, Tr(Str::ContainerKind), title.c_str(), count);
+          AddRow(&files, Tr(Str::PackageType), buf);
         } else {
-          AddRow(&files, L"安装包类型", title);
+          AddRow(&files, Tr(Str::PackageType), title);
         }
       }
     }
     const uint32_t size = UintField(file, "size");
-    if (size != 0) AddRow(&files, L"大小", FormatBytes(size));
+    if (size != 0) AddRow(&files, Tr(Str::Size), FormatBytes(size));
     const uint32_t mtime = UintField(file, "mtime");
-    if (mtime != 0) AddRow(&files, L"修改时间", FormatUnixTime(mtime));
+    if (mtime != 0) AddRow(&files, Tr(Str::Modified), FormatUnixTime(mtime));
 
     const std::wstring sha = StrField(file, "sha256");
     if (sha.empty()) {
-      AddActionRow(&files, L"SHA-256", L"未计算");
+      AddActionRow(&files, L"SHA-256", Tr(Str::NotComputed));
     } else {
       AddRow(&files, L"SHA-256", sha);
     }
@@ -390,22 +393,25 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
     const bool is_hap = hap != nullptr && hap->is_object();
     if (sig == nullptr) {
       // 用户只关心"这个功能有没有"：没实现的功能一律写"未实现"，不解释原因。
-      AddRow(&files, L"签名", is_hap ? L"未实现" : L"未发现签名（可能未签名或被重打包）");
+      AddRow(&files, Tr(Str::Signature),
+             is_hap ? Tr(Str::NotImplemented) : Tr(Str::SignatureNone));
     } else {
       const std::vector<std::string> schemes = StringArray(sig, "scheme");
-      if (!schemes.empty()) AddRow(&files, L"签名", JoinStrings(schemes, L", ", 8));
+      if (!schemes.empty()) AddRow(&files, Tr(Str::Signature), JoinStrings(schemes, L", ", 8));
       const json::Value* certs = Field(sig, "certs");
       if (certs != nullptr && certs->type == json::Type::Array && !certs->items.empty()) {
         const json::Value* first = certs->items.front().get();
-        AddRow(&files, L"证书", StrField(first, "subject"));
-        AddRow(&files, L"证书摘要", StrField(first, "sha256"));
+        AddRow(&files, Tr(Str::Cert), StrField(first, "subject"));
+        AddRow(&files, Tr(Str::CertDigest), StrField(first, "sha256"));
         const std::wstring from = StrField(first, "notBefore");
         const std::wstring to = StrField(first, "notAfter");
-        if (!from.empty() || !to.empty()) AddRow(&files, L"有效期", from + L" → " + to);
+        if (!from.empty() || !to.empty()) {
+          AddRow(&files, Tr(Str::Validity), from + L" → " + to);
+        }
         if (certs->items.size() > 1) {
           wchar_t buf[64];
-          _snwprintf_s(buf, _TRUNCATE, L"另有 %zu 张证书", certs->items.size() - 1);
-          AddRow(&files, L"其它证书", buf);
+          _snwprintf_s(buf, _TRUNCATE, Tr(Str::OtherCerts), certs->items.size() - 1);
+          AddRow(&files, Tr(Str::Cert), buf);
         }
       }
     }
@@ -416,7 +422,9 @@ bool BuildPageModel(const json::Value& doc, const std::wstring& fallback_name, P
   const json::Value* warnings = Field(diag, "warnings");
   if (warnings != nullptr && warnings->type == json::Type::Array) {
     for (const json::ValuePtr& item : warnings->items) {
-      if (item != nullptr && item->is_string()) out->warnings.push_back(U8(item->as_string()));
+      if (item != nullptr && item->is_string()) {
+        out->warnings.push_back(TrMsg(U8(item->as_string())));
+      }
     }
   }
   return true;
@@ -428,7 +436,7 @@ void BuildErrorModel(const std::wstring& title, const std::vector<std::wstring>&
   *out = PageModel();
   out->label = title;
   PageGroup group;
-  group.title = L"详情";
+  group.title = Tr(Str::ErrorDetails);
   for (const std::wstring& line : lines) {
     if (line.empty()) continue;
     PageRow row;

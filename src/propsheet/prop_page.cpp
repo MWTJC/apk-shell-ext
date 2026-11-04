@@ -28,6 +28,7 @@
 
 #include "core/apk_icon.h"
 #include "core/common.h"
+#include "core/i18n.h"
 #include "core/json_lite.h"
 #include "core/log.h"
 #include "core/thumb_cache.h"
@@ -40,6 +41,12 @@
 #include "propsheet/worker_client.h"
 
 namespace {
+
+// 页面标题：属性表要求这个字符串指针活到对话框销毁，所以用函数内静态缓存。
+const wchar_t* PageTitleText() {
+  static const std::wstring title = apksx::Tr(apksx::Str::PageTitle);
+  return title.c_str();
+}
 
 constexpr UINT kMsgInfoDone = WM_APP + 1;
 constexpr UINT kMsgHashDone = WM_APP + 2;
@@ -166,7 +173,7 @@ struct PageState : std::enable_shared_from_this<PageState> {
   apksx::PageModel model;
   apksx::PageTheme theme;
   HBITMAP icon = nullptr;
-  std::wstring footer = L"正在解析…";
+  std::wstring footer = apksx::Tr(apksx::Str::Parsing);
   std::string raw_json;
 
   HWND Window() {
@@ -188,7 +195,7 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
   std::wstring exe;
   if (!apksx::FindWorkerExe(&exe)) {
     output.status = apksx::WorkerStatus::Missing;
-    output.message = L"解析器缺失：apkinfo.exe 不在扩展目录里";
+    output.message = apksx::Tr(apksx::Str::MissingWorker);
   } else {
     output = apksx::RunWorker(exe, path, want_hash, want_hash ? 30 : 8, &state->cancel);
   }
@@ -207,7 +214,7 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
     apksx::Error err;
     if (!apksx::json::Parse(output.stdout_text, &doc, &err) || doc == nullptr) {
       output.status = apksx::WorkerStatus::BadOutput;
-      output.message = L"解析输出不是合法 JSON";
+      output.message = apksx::Tr(apksx::Str::BadJson);
     } else if (want_hash) {
       const apksx::json::Value* file = doc->Find("file");
       const apksx::json::Value* sha = file == nullptr ? nullptr : file->Find("sha256");
@@ -217,13 +224,13 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
         result->ok = true;
       } else {
         output.status = apksx::WorkerStatus::BadOutput;
-        output.message = L"哈希计算没有返回 sha256";
+        output.message = apksx::Tr(apksx::Str::HashMissing);
       }
     } else if (apksx::BuildPageModel(*doc, state->file_name, &result->model, &err)) {
       result->ok = true;
     } else {
       output.status = apksx::WorkerStatus::BadOutput;
-      output.message = L"解析输出结构不认识";
+      output.message = apksx::Tr(apksx::Str::UnknownStructure);
     }
     if (result->ok) result->raw_json = output.stdout_text;
   }
@@ -231,9 +238,9 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
   if (result->ok) {
     wchar_t buf[96];
     if (want_hash) {
-      _snwprintf_s(buf, _TRUNCATE, L"哈希已计算（%llu ms）", elapsed);
+      _snwprintf_s(buf, _TRUNCATE, apksx::Tr(apksx::Str::HashDone), elapsed);
     } else {
-      _snwprintf_s(buf, _TRUNCATE, L"解析完成 · %llu ms", elapsed);
+      _snwprintf_s(buf, _TRUNCATE, apksx::Tr(apksx::Str::ParsedDone), elapsed);
     }
     result->footer = buf;
     if (!want_hash) {
@@ -245,7 +252,7 @@ void WorkerThread(std::shared_ptr<PageState> state, bool want_hash, std::wstring
       result->icon = LoadHeaderIcon(path, icon_px);
     }
   } else {
-    result->footer = output.message.empty() ? L"解析失败" : output.message;
+    result->footer = output.message.empty() ? apksx::Tr(apksx::Str::ParseFailed) : output.message;
   }
 
   if (SUCCEEDED(com)) ::CoUninitialize();
@@ -266,11 +273,11 @@ void StartWorker(HWND hwnd, const std::shared_ptr<PageState>& state, bool want_h
   state->cancel.store(false);
   if (want_hash) {
     state->hash_running = true;
-    state->footer = L"正在计算 SHA-256…";
+    state->footer = apksx::Tr(apksx::Str::Hashing);
   } else {
     state->worker_running = true;
     state->info_ok = false;
-    state->footer = L"正在解析…";
+    state->footer = apksx::Tr(apksx::Str::Parsing);
   }
   RefreshView(state->hwnd);
   std::thread worker(WorkerThread, state, want_hash, state->path);
@@ -365,7 +372,7 @@ void CopySelected(HWND hwnd, bool with_key) {
   std::wstring text = value.empty() ? key : value;
   if (with_key && !key.empty() && !value.empty()) text = key + L": " + value;
   if (CopyTextToClipboard(hwnd, text)) {
-    state->footer = L"已复制到剪贴板";
+    state->footer = apksx::Tr(apksx::Str::Copied);
     SetWindowTextSafe(state->status_view, state->footer);
   }
 }
@@ -376,7 +383,7 @@ void CopyAllJson(HWND hwnd) {
   std::wstring wide;
   if (!state->raw_json.empty() && apksx::Utf8ToWide(state->raw_json, &wide)) {
     if (CopyTextToClipboard(hwnd, wide)) {
-      state->footer = L"已复制 JSON 到剪贴板";
+      state->footer = apksx::Tr(apksx::Str::CopiedJson);
       SetWindowTextSafe(state->status_view, state->footer);
     }
   }
@@ -405,11 +412,11 @@ void ShowListMenu(HWND hwnd, int screen_x, int screen_y) {
 
   HMENU menu = ::CreatePopupMenu();
   if (menu == nullptr) return;
-  ::AppendMenuW(menu, MF_STRING, kMenuCopyValue, L"复制值");
-  ::AppendMenuW(menu, MF_STRING, kMenuCopyPair, L"复制 \u201C属性: 值\u201D");
+  ::AppendMenuW(menu, MF_STRING, kMenuCopyValue, apksx::Tr(apksx::Str::MenuCopyValue));
+  ::AppendMenuW(menu, MF_STRING, kMenuCopyPair, apksx::Tr(apksx::Str::MenuCopyPair));
   ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   ::AppendMenuW(menu, MF_STRING | (state->raw_json.empty() ? MF_GRAYED : 0U), kMenuCopyJson,
-                L"复制全部为 JSON");
+                apksx::Tr(apksx::Str::MenuCopyJson));
 
   const int command = static_cast<int>(
       ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen_x, screen_y, 0, hwnd, nullptr));
@@ -448,10 +455,10 @@ void CreateControls(HWND hwnd, PageState* state) {
   LVCOLUMNW column{};
   column.mask = LVCF_TEXT | LVCF_SUBITEM | LVCF_FMT;
   column.fmt = LVCFMT_LEFT;
-  column.pszText = const_cast<wchar_t*>(L"属性");
+  column.pszText = const_cast<wchar_t*>(apksx::Tr(apksx::Str::ColumnKey));
   column.iSubItem = 0;
   ListView_InsertColumn(state->list, 0, &column);
-  column.pszText = const_cast<wchar_t*>(L"值");
+  column.pszText = const_cast<wchar_t*>(apksx::Tr(apksx::Str::ColumnValue));
   column.iSubItem = 1;
   ListView_InsertColumn(state->list, 1, &column);
 
@@ -459,14 +466,14 @@ void CreateControls(HWND hwnd, PageState* state) {
 
   const DWORD button_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON;
   state->hash_button = ::CreateWindowExW(
-      0, L"Button", L"计算 SHA-256", button_style, 0, 0, 0, 0, hwnd,
+      0, L"Button", apksx::Tr(apksx::Str::ButtonHash), button_style, 0, 0, 0, 0, hwnd,
       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHash)), ::GetModuleHandleW(nullptr), nullptr);
   state->copy_button = ::CreateWindowExW(
-      0, L"Button", L"复制全部为 JSON", button_style, 0, 0, 0, 0, hwnd,
+      0, L"Button", apksx::Tr(apksx::Str::ButtonCopyJson), button_style, 0, 0, 0, 0, hwnd,
       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdCopyJson)), ::GetModuleHandleW(nullptr),
       nullptr);
   state->retry_button = ::CreateWindowExW(
-      0, L"Button", L"重试", button_style, 0, 0, 0, 0, hwnd,
+      0, L"Button", apksx::Tr(apksx::Str::ButtonRetry), button_style, 0, 0, 0, 0, hwnd,
       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRetry)), ::GetModuleHandleW(nullptr), nullptr);
   ::ShowWindow(state->retry_button, SW_HIDE);
   ::EnableWindow(state->copy_button, FALSE);
@@ -524,7 +531,7 @@ class PropPage final : public IShellPropSheetExt, public IPersistFile, public IS
       page.dwFlags = PSP_DEFAULT | PSP_USETITLE;
       page.hInstance = g_module;
       page.pszTemplate = MAKEINTRESOURCEW(IDD_APKPROP);
-      page.pszTitle = MAKEINTRESOURCEW(IDS_PAGE_TITLE);
+      page.pszTitle = PageTitleText();
       page.pfnDlgProc = DlgProc;
       page.lParam = reinterpret_cast<LPARAM>(this);
 
@@ -757,7 +764,7 @@ void ApplyPending(HWND hwnd) {
     } else {
       std::vector<std::wstring> lines;
       lines.push_back(result->footer);
-      lines.push_back(L"可以点「重试」再解析一次。");
+      lines.push_back(apksx::Tr(apksx::Str::RetryHint));
       apksx::PageModel model;
       apksx::BuildErrorModel(state->file_name, lines, &model);
       state->model = std::move(model);

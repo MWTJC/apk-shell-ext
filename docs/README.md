@@ -9,9 +9,11 @@
 | [design.md](design.md) | **设计出发点**：为什么要"缩略图先行、元数据懒解析"；四条接口的调用频率对比；既有方案（HashTab/果核/ApkShellext2）的实测结论 | 想改设计前 |
 | [architecture.md](architecture.md) | 组件与进程边界、三个产物的契约、JSON schema v1、注册表契约、缓存 | 写代码前 |
 | [formats.md](formats.md) | 安装包的容器/manifest/资源表/图标位置矩阵与安全限额（v1 实做 APK 家族 + HAP；AAB/IPA/APPX 保留结构备查） | 做 M4 时 |
-| [roadmap.md](roadmap.md) | **M0–M5 阶段**、每阶段交付/验收/退出条件、风险登记、DoD | 每次开工前 |
-| [verification.md](verification.md) | 把"无感"变成可复现的数字：ProcMon 配方、耗时/内存判据、记录表 | 每阶段收尾 |
-| [adr/](adr/README.md) | 已冻结的架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主、格式范围） | 想推翻某个约束前 |
+| [roadmap.md](roadmap.md) | **M0–M5 阶段**、每阶段交付/验收/退出条件与实施记录、风险登记、技术债、DoD | 每次开工前 |
+| [verification.md](verification.md) | 把"无感"变成可复现的数字：ProcMon 配方、耗时/内存判据、R-0001~R-0014 记录表 | 每阶段收尾 |
+| [m5-delivery.md](m5-delivery.md) | M5 交付：Inno 安装器、格式图标、VERSIONINFO、i18n、装好之后的命令；含未做清单 | 用/改交付形态前 |
+| [install.md](install.md) | 用户手册：装/卸/静默/便携/清缓存/开诊断/FAQ（会随安装包落到安装目录） | 装或卸之前 |
+| [adr/](adr/README.md) | 架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主、格式范围、分发与安装形态） | 想推翻某个约束前 |
 
 ## 写作约定
 

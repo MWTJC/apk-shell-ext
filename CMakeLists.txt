@@ -62,6 +62,7 @@ add_library(apksx_core STATIC
   src/core/hap.cpp
   src/core/apk_signature.cpp
   src/core/json_lite.cpp
+  src/core/i18n.cpp
   src/core/wic_image.cpp
   src/core/thumb_cache.cpp
 )
@@ -69,7 +70,7 @@ target_include_directories(apksx_core PUBLIC src)
 target_link_libraries(apksx_core PUBLIC apksx_miniz
   bcrypt crypt32 windowscodecs ole32 shlwapi)
 target_compile_definitions(apksx_core PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN
-                                               NOMINMAX APKSX_PARSER_VERSION="m4a")
+                                               NOMINMAX APKSX_PARSER_VERSION="m5")
 
 # ---------------------------------------------------------------------------
 # apkthumb.dll —— 唯一进入 explorer 的代码：IThumbnailProvider
@@ -113,9 +114,11 @@ endif()
 
 # ---------------------------------------------------------------------------
 # apkinfo.exe —— 全量解析 worker（ADR-0003）。无 UI，stdout 出 JSON。
+#   M5 起它同时承担"装好之后"的小工具：--status / --diag / --clear-cache。
 # ---------------------------------------------------------------------------
-add_executable(apkinfo src/worker/apkinfo.cpp)
-target_link_libraries(apkinfo PRIVATE apksx_core)
+add_executable(apkinfo src/worker/apkinfo.cpp src/worker/support.cpp src/worker/apkinfo.rc)
+target_link_libraries(apkinfo PRIVATE apksx_core shell32 ole32)
+target_include_directories(apkinfo PRIVATE src)
 set_target_properties(apkinfo PROPERTIES OUTPUT_NAME "apkinfo")
 
 # ---------------------------------------------------------------------------

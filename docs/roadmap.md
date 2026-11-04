@@ -22,7 +22,7 @@ flowchart LR
 | M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | ✅ 完成（2026-11-04）：JSON + aapt2 交叉校验、TD-001 关闭、签名块、features、`splits`（随 M4a）全部落地；仅剩 TD-002 与 V8 回归 |
 | M3 | 属性页 | `apkprop.dll`（原生控件、异步、错误态、复制、可折叠分组） | 2–3 d | ✅ 用户已验收（[R-0006](verification.md)·[R-0009](verification.md)·[R-0010](verification.md)）；DPI 由布局单测覆盖（[R-0011](verification.md)） |
 | M4 | 格式 | `.apk` 家族 + `.hap`（其余格式按 [ADR-0006](adr/0006-format-scope-cut.md) 不做） | 6–9 d → 实做 2–3 d | ✅ 完成：M4a（[R-0011](verification.md)）· M4d（[R-0012](verification.md)/[R-0013](verification.md)） |
-| M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
+| M5 | 交付打磨 | 安装器（Inno）、格式图标、VERSIONINFO、诊断、i18n、缓存清理 | 3–4 d → 实做 1 d | ✅ 完成（2026-11-04，记录 [verification.md R-0014](verification.md)；决策 [ADR-0007](adr/0007-inno-setup-per-user-install.md)） |
 
 **M0 评审记录（2026-11-03）**——三项决策已确认，后续实现不得再讨论：
 
@@ -222,7 +222,7 @@ flowchart LR
 | 注册脚本 `-Feature Propsheet`（HKCU，免 UAC） | ✅ |
 | 亮暗跟随系统（页内不自带配色） | ✅ 2026-11-04 改为原生控件：配色/主题全部由系统与宿主决定 |
 | 150%/200% DPI、100 次开关句柄、卸载 diff | ✅ DPI 由布局纯函数 20,832 组合断言覆盖；100 次开关实测句柄无增长（[R-0011](verification.md)）；真实缩放渲染未做人眼确认 |
-| 中英双语 | ⬜ M5 |
+| 中英双语 | ✅ M5（R-0014）：`src/core/i18n.*`，属性页中英各截一张 |
 
 ## M4 · 全格式（范围已收敛，见 [ADR-0006](adr/0006-format-scope-cut.md)）
 
@@ -278,6 +278,8 @@ flowchart LR
 
 ## M5 · 交付打磨
 
+> 状态：✅ 2026-11-04 完成。下面是最初的计划，实际落地见本节的「M5 实施记录」小标题。
+
 **交付**
 
 1. 安装器（一次 UAC 完成注册；卸载精确回滚）与便携版（`register.ps1`）。
@@ -297,6 +299,32 @@ flowchart LR
 - 卸载重装后缩略图仍正常（缓存键含版本号）。
 
 **退出条件**：可交付给自己日常使用，且文档与实现一致（"文档说的 = 代码做的"）。
+
+**M5 实施记录（2026-11-04）**
+
+实施记录：[m5-delivery.md](m5-delivery.md)（设计取舍、实测数字、未做清单）、
+[verification.md R-0014](verification.md)（原始输出）、[ADR-0007](adr/0007-inno-setup-per-user-install.md)（分发决策）。
+
+| 交付项 | 落地形态 |
+| --- | --- |
+| 安装器（一次 UAC / 零 UAC） | `installerpk-shell-ext.iss` + `tools\pack.cmd` → `out\distpk-shell-ext-setup-1.0.0.exe`（2.1 MB）。默认**按用户装、零 UAC**；勾"为所有用户安装"或 `/ALLUSERS` 才要一次 UAC |
+| 卸载精确回滚 | Inno 的 `unins000.exe`：注册表/文件按声明撤销，外加 `[UninstallDelete]` 清缩略图缓存与日志。实测装前/卸后快照 diff = 0 |
+| 便携版 | `tools
+egister.ps1 -Install/-Uninstall`（含 `-Feature Thumb|Propsheet|Icons`、`-Scope LocalMachine`）保留，`apkinfo --status` 可核对 |
+| VERSIONINFO | `src/version.h` 单一来源，四个二进制 `1.0.0.0`，en-US + zh-CN 双 StringFileInfo |
+| 格式差异化 ico + DefaultIcon | `tools\gen_icons.py` → `icons\{apk,apks,hap}.ico`（16/24/32/48/256 各档独立绘制）；安装器与脚本都写 `DefaultIcon` |
+| 诊断开关 | `apkinfo.exe --diag on|off|status|clear`（底层仍是 `%TEMP%pk-shell-ext.debug.on`） |
+| 中英文 | `src/core/i18n.{h,cpp}`：界面 77 条 + 错误字典约 60 条；`UiLanguage`（HKCU）→ `APKSX_LANG` → 系统语言 |
+| 缓存清理 | `apkinfo.exe --clear-cache` / `--cache-info` |
+| `IExtractIcon` 评估 | **不做**，ADR-0001 不修订（理由见 m5-delivery.md §6） |
+
+**验收数字**：安装器 `/VERYSILENT` 退出 0 且无 UAC；`verify-install.ps1` 装后 `ok`、卸后 `ok`、快照 diff 一致；
+列表视图 16 px 三族可分辨（截图）；属性页中文 219 ms / 英文 172 ms（7.9 MB 包）；
+回归真包 3/3、夹具 6/6、签名 3/3、容器 2/2、HAP 2/2、model 71 ok。
+
+**未验证**：`/ALLUSERS` 整机安装实跑（需要点 UAC）、代码签名（v1 无证书）、ProcMon 复跑 V1/V9、
+`proptest.exe` 在本机 Windows 11 26300 上 `PropertySheetW` 返回 −1（换 M4 旧 DLL 同样失败，属工具/环境问题，
+属性页改用真实资源管理器截图验收）。
 
 ## 5. 技术债登记
 

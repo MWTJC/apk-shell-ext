@@ -96,6 +96,12 @@ flowchart LR
 
 ```
 apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
+
+# M5 起同一个 exe 还带"装好之后"的小工具（不再单独发一个 apkinst.exe，见 ADR-0007）
+apkinfo.exe --status                         五个扩展名的注册状态 / 图标路径 / 应用列表条目
+apkinfo.exe --diag on|off|status|clear       诊断日志开关与大小
+apkinfo.exe --clear-cache [--cache-info]     自建缩略图缓存
+apkinfo.exe --lang zh|en|auto                属性页语言（写 HKCU\Software\apk-shell-ext\UiLanguage）
 ```
 
 | 项 | 约定 |
@@ -162,7 +168,7 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 **`features`** 只收清单里显式声明的 `uses-feature`（`required` 缺省 true）。
 aapt2 会额外打印"隐含特性"（默认 faketouch、屏幕方向、由权限推出的 wifi），那是它自己推的，我们**不**合成。
 
-## 2.4 静态类型图标（M5）
+## 2.4 静态类型图标（M5 已落地，见 [m5-delivery.md §2](m5-delivery.md)）
 
 小图标 / 列表 / 详细信息视图不调用任何代码，用**每个扩展名自己的** `DefaultIcon` 区分格式：
 
@@ -172,7 +178,9 @@ aapt2 会额外打印"隐含特性"（默认 faketouch、屏幕方向、由权�
 | `.apks` `.xapk` `.apkm` | `icons\apks.ico` | 同族，标注分包 |
 | `.hap` | `icons\hap.ico` | "HAP" |
 
-- 每个 ico 内含 16/24/32/48/256 五档，`DefaultIcon` 只写文件路径（`"%ProgramFiles%\apk-shell-ext\icons\apk.ico",0`）。
+- 每个 ico 内含 16/24/32/48/256 五档（**每档独立绘制**，不是 256 缩小；48 起才画 "APK"/"XAPK"/"HAP" 字样），
+  `DefaultIcon` 只写文件路径（按用户安装是 `"%LOCALAPPDATA%\Programs\apk-shell-ext\icons\apk.ico",0`）。
+  图标由 `tools\gen_icons.py` 生成并入库：运行时由 Explorer 直接读文件，构建不依赖 Python。
 - **不实现 `IExtractIcon`**（ADR-0001）；`DefaultIcon` 是 Explorer 自己读资源，零调用成本。
 - 卸载时随注册表一起还原（先记录原值，若原来无值则删除该键）。
 
@@ -211,7 +219,17 @@ HKCR\.apk\DefaultIcon
     (default) = "<install dir>\icons\apk.ico",0     // M5；纯静态，不加载任何 DLL
 ```
 
-- 写 `HKLM` 需要管理员：安装器一次 UAC；卸载时**精确删除自己写过的键**（不 `reg delete /f` 整个类型）。
+- **安装形态（M5，[ADR-0007](adr/0007-inno-setup-per-user-install.md)）**：默认按用户装——
+  `%LOCALAPPDATA%\Programs\apk-shell-ext` + `HKCU\Software\Classes`，**零 UAC**；勾"为所有用户安装"或 `/ALLUSERS` 时才 `%ProgramFiles%` + `HKLM`，一次 UAC。
+  `installer\apk-shell-ext.iss` 里注册表根一律用 `HKA`（整机 = HKLM、按用户 = HKCU），
+  `Subkey` 写 `Software\Classes\…`；**不要写 `HKCR`**，非管理员模式会直接写 HKLM
+  失败（实测 `RegCreateKeyEx` 代码 5，整个安装回滚）。
+- 卸载由 `unins000.exe` 按声明撤销（`uninsdeletevalue` / `uninsdeletekeyifempty`），外加
+  `[UninstallDelete]` 清 `%LOCALAPPDATA%\apk-shell-ext\thumbs` 与日志；
+  验收用 `tools\verify-install.ps1`（装后断言 + 卸后残留检查 + 快照 diff）。
+- 界面语言开关：`HKCU\Software\apk-shell-ext\UiLanguage` = `zh` / `en` /
+  缺省（跟随系统），由 `apkinfo --lang` 写。属性页跑在 `explorer.exe` 里，收不到环境变量，
+  只能走注册表。
 - 不碰 `.apk` 的默认 ProgID / 文件关联（那是"打开方式"的事，与本文无关）。
 - 提供 `tools\register.ps1 -Install|-Uninstall -Extensions apk,apks,...` 作为手工入口（免装安装器也能测）。
 

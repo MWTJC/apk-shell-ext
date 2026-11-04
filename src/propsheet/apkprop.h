@@ -19,6 +19,5 @@ long ServerLockCount();
 // 类厂创建属性页对象
 HRESULT CreatePropertyPage(REFIID riid, void** ppv);
 
-// 资源 ID（与 apkprop.rc 一致）
+// 资源 ID（与 apkprop.rc 一致）；页面标题/文案不在这里，见 src/core/i18n.cpp
 #define IDD_APKPROP 101
-#define IDS_PAGE_TITLE 201

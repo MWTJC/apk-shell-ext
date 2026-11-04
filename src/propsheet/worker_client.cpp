@@ -1,5 +1,7 @@
 #include "propsheet/worker_client.h"
 
+#include "core/i18n.h"
+
 #include <cstdio>
 #include <cwchar>
 #include <string_view>
@@ -120,7 +122,7 @@ WorkerOutput RunWorker(const std::wstring& exe, const std::wstring& file, bool w
   if (!::CreatePipe(&read_pipe, &write_pipe, &sa, 64 * 1024)) {
     result.status = WorkerStatus::Missing;
     result.last_error = ::GetLastError();
-    result.message = L"创建管道失败";
+    result.message = Tr(Str::PipeCreateFailed);
     return result;
   }
   ::SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
@@ -160,7 +162,7 @@ WorkerOutput RunWorker(const std::wstring& exe, const std::wstring& file, bool w
   if (!created) {
     ::CloseHandle(read_pipe);
     result.status = WorkerStatus::Missing;
-    result.message = L"无法启动解析器（apkinfo.exe）";
+    result.message = Tr(Str::WorkerStartFailed);
     DebugLogf(L"propsheet: CreateProcess failed for %s (err=%lu)", exe.c_str(),
               static_cast<unsigned long>(result.last_error));
     return result;
@@ -256,12 +258,12 @@ WorkerOutput RunWorker(const std::wstring& exe, const std::wstring& file, bool w
   }
   if (overflow) {
     result.status = WorkerStatus::BadOutput;
-    result.message = L"解析输出超过 4 MB（异常）";
+    result.message = Tr(Str::OutputTooBig);
     return result;
   }
   if (timed_out) {
     result.status = WorkerStatus::Timeout;
-    result.message = L"解析超时";
+    result.message = Tr(Str::Timeout);
     return result;
   }
 
@@ -269,7 +271,7 @@ WorkerOutput RunWorker(const std::wstring& exe, const std::wstring& file, bool w
     case 0:
       if (TrimAscii(collected).empty()) {
         result.status = WorkerStatus::BadOutput;
-        result.message = L"解析器没有输出";
+        result.message = Tr(Str::NoOutput);
       } else {
         result.status = WorkerStatus::Ok;
       }
@@ -280,17 +282,17 @@ WorkerOutput RunWorker(const std::wstring& exe, const std::wstring& file, bool w
       std::wstring cleaned = text;
       const std::wstring prefix = L"apkinfo: ";
       if (cleaned.rfind(prefix, 0) == 0) cleaned = cleaned.substr(prefix.size());
-      result.message = cleaned.empty() ? L"不是有效的安装包" : cleaned;
+      result.message = cleaned.empty() ? Tr(Str::NotPackage) : cleaned;
       break;
     }
     case 3:
       result.status = WorkerStatus::Timeout;
-      result.message = L"解析超时（已由解析器中止）";
+      result.message = Tr(Str::TimeoutAborted);
       break;
     default: {
       result.status = WorkerStatus::Crashed;
       wchar_t buf[96];
-      _snwprintf_s(buf, _TRUNCATE, L"解析器异常退出（0x%08lX）",
+      _snwprintf_s(buf, _TRUNCATE, Tr(Str::WorkerCrashed),
                    static_cast<unsigned long>(exit_code));
       result.message = buf;
       break;

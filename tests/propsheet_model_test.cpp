@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/common.h"
+#include "core/i18n.h"
 #include "core/json_lite.h"
 #include "propsheet/page_layout.h"
 #include "propsheet/page_model.h"
@@ -251,8 +252,44 @@ void RunLayoutSelfTest() {
         "200% 列表宽度是 100% 的两倍");
 }
 
+// 双语：模型里的文字全部经 i18n，所以先钉住语言再断言（否则跟着机器语言飘）。
+void RunLanguageSelfTest() {
+  std::printf("selftest: i18n\n");
+  const apksx::Lang saved = apksx::UiLanguage();
+
+  apksx::SetUiLanguage(apksx::Lang::Zh);
+  Check(std::wstring(apksx::Tr(apksx::Str::GroupApp)) == L"应用", "zh: group title");
+  Check(std::wstring(apksx::Tr(apksx::Str::PageTitle)) == L"安装包信息", "zh: page title");
+  Check(apksx::TrMsg(L"解析超时") == L"解析超时", "zh: messages are identity");
+
+  apksx::SetUiLanguage(apksx::Lang::En);
+  Check(std::wstring(apksx::Tr(apksx::Str::GroupApp)) == L"App", "en: group title");
+  Check(std::wstring(apksx::Tr(apksx::Str::PageTitle)) == L"Package info", "en: page title");
+  Check(apksx::TrMsg(L"解析超时") == L"parse timed out", "en: dictionary hit");
+  Check(apksx::TrMsg(L"这条不在字典里") == L"这条不在字典里", "en: unknown message passes through");
+
+  // 英文模型：同一份 JSON 应该出英文分组，SHA-256 行仍能按 key 回填
+  apksx::json::ValuePtr doc;
+  apksx::Error err;
+  if (apksx::json::Parse(kSample, &doc, &err) && doc != nullptr) {
+    apksx::PageModel model;
+    Check(apksx::BuildPageModel(*doc, L"a.apk", &model, &err), "en: BuildPageModel succeeds");
+    const apksx::PageGroup* perms = FindGroupByPrefix(model, L"Permissions ·");
+    Check(perms != nullptr && perms->rows.size() == 2, "en: permissions group");
+    const apksx::PageRow* sha = FindRowAnywhere(model, L"SHA-256");
+    Check(sha != nullptr && sha->action, "en: SHA-256 action row");
+    apksx::SetSha256(&model, L"cafe");
+    sha = FindRowAnywhere(model, L"SHA-256");
+    Check(sha != nullptr && sha->value == L"cafe", "en: SetSha256 still finds the row");
+  }
+
+  apksx::SetUiLanguage(saved);
+}
+
 int RunSelfTest() {
   std::printf("selftest: parse + model\n");
+  // 模型里的文案全部来自 i18n：下面的断言按中文表写，所以先钉住中文
+  apksx::SetUiLanguage(apksx::Lang::Zh);
   apksx::json::ValuePtr doc;
   apksx::Error err;
   const bool parsed = apksx::json::Parse(kSample, &doc, &err);
@@ -382,6 +419,7 @@ int RunSelfTest() {
   }
 
   RunLayoutSelfTest();
+  RunLanguageSelfTest();
   return g_failures == 0 ? 0 : 1;
 }
 

@@ -27,9 +27,10 @@ param(
     [Parameter(ParameterSetName = 'Install')][switch]$Install,
     [Parameter(ParameterSetName = 'Uninstall')][switch]$Uninstall,
     [ValidateSet('CurrentUser', 'LocalMachine')][string]$Scope = 'CurrentUser',
-    [ValidateSet('All', 'Thumb', 'Propsheet')][string]$Feature = 'All',
+    [ValidateSet('All', 'Thumb', 'Propsheet', 'Icons')][string]$Feature = 'All',
     [string[]]$Extensions = @('apk', 'xapk', 'apks', 'apkm', 'hap'),
-    [string]$DllDir = ''
+    [string]$DllDir = '',
+    [string]$IconDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,8 +43,19 @@ $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
 if (-not $Install -and -not $Uninstall) { $Install = $true }
 if ([string]::IsNullOrEmpty($DllDir)) { $DllDir = Join-Path $RepoRoot 'out\x64' }
+if ([string]::IsNullOrEmpty($IconDir)) { $IconDir = Join-Path $RepoRoot 'icons' }
 $DllPath = Join-Path $DllDir 'apkthumb.dll'
 $PropDllPath = Join-Path $DllDir 'apkprop.dll'
+
+# One icon file per extension family (architecture.md S2.4). From M5 on this is what
+# tells APK / multi-APK / HAP apart in small-icon and list views, without loading any DLL.
+$IconMap = @{
+    'apk'  = 'apk.ico'
+    'xapk' = 'apks.ico'
+    'apks' = 'apks.ico'
+    'apkm' = 'apks.ico'
+    'hap'  = 'hap.ico'
+}
 
 $ClassesRoot = if ($Scope -eq 'CurrentUser') { 'HKCU:\Software\Classes' } else { 'HKLM:\Software\Classes' }
 $BackupDir = Join-Path $env:LOCALAPPDATA 'apk-shell-ext'
@@ -135,6 +147,48 @@ function Install-ThumbHandler {
     Write-Host "[install] thumbnails registered. Restart Explorer (or clear the thumbnail cache) to see changes."
 }
 
+function Install-IconsHandler {
+    if (-not (Test-Path -LiteralPath $IconDir)) {
+        throw "icon directory not found at $IconDir (run: uv run --with pillow python tools\gen_icons.py)"
+    }
+    $iconFull = (Resolve-Path -LiteralPath $IconDir).Path
+
+    foreach ($ext in $Extensions) {
+        $leaf = $IconMap[$ext]
+        if (-not $leaf) { continue }
+        $ico = Join-Path $iconFull $leaf
+        if (-not (Test-Path -LiteralPath $ico)) {
+            throw "icon $ico missing (run tools\gen_icons.py)"
+        }
+        $key = Join-Path $ClassesRoot ('.' + $ext + '\DefaultIcon')
+        $value = '"' + $ico + '",0'
+
+        $keyExisted = Test-Path -LiteralPath $key
+        $oldValue = Get-ValueOrDefault $key ''
+        Save-Backup @{ keyExisted = $keyExisted; path = $key; name = ''; oldValue = $oldValue; newValue = $value }
+
+        Ensure-Key $key
+        Set-ItemProperty -LiteralPath $key -Name '(default)' -Value $value
+        Write-Host "[install] .$ext DefaultIcon -> $value"
+    }
+}
+
+function Notify-Shell {
+    # Explorer caches file-type icons: tell it the associations changed (best effort).
+    try {
+        if (-not ('ApkShellExtShellNotify' -as [type])) {
+            Add-Type -Namespace ApkShellExt -Name ShellNotify -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shell32.dll")]
+public static extern void SHChangeNotify(int eventId, int flags, System.IntPtr item1, System.IntPtr item2);
+'@
+        }
+        [ApkShellExt.ShellNotify]::SHChangeNotify(0x08000000, 0, [System.IntPtr]::Zero, [System.IntPtr]::Zero)
+        Write-Host "[install] SHChangeNotify(SHCNE_ASSOCCHANGED) sent"
+    } catch {
+        Write-Host "[install] SHChangeNotify failed (harmless): $($_.Exception.Message)"
+    }
+}
+
 function Uninstall-Handler {
     # Remove only what we wrote; restore previous values recorded in the backup.
     foreach ($rec in (Read-BackupRecords)) {
@@ -174,6 +228,17 @@ function Uninstall-Handler {
     if (Test-Path -LiteralPath $clsidKey) {
         Remove-Item -LiteralPath $clsidKey -Recurse -Force
         Write-Host "[uninstall] removed $clsidKey"
+    }
+
+    # DefaultIcon (M5): restore from the backup above, plus a targeted sweep for keys that
+    # still point at one of our icon files (pointing elsewhere means another app owns them).
+    foreach ($ext in $Extensions) {
+        $iconKey = Join-Path $ClassesRoot ('.' + $ext + '\DefaultIcon')
+        $current = Get-ValueOrDefault $iconKey ''
+        if ($null -ne $current -and ($current -match '\\(apk|apks|hap)\.ico')) {
+            Remove-Item -LiteralPath $iconKey -Recurse -Force
+            Write-Host "[uninstall] removed $iconKey"
+        }
     }
 
     # Property sheet keys (belt and braces; the backup restore above usually did it already)
@@ -243,6 +308,8 @@ function Install-PropsheetHandler {
 if ($Uninstall) {
     Uninstall-Handler
 } else {
-    if ($Feature -ne 'Propsheet') { Install-ThumbHandler }
-    if ($Feature -ne 'Thumb') { Install-PropsheetHandler }
+    if ($Feature -eq 'All' -or $Feature -eq 'Thumb') { Install-ThumbHandler }
+    if ($Feature -eq 'All' -or $Feature -eq 'Propsheet') { Install-PropsheetHandler }
+    if ($Feature -eq 'All' -or $Feature -eq 'Icons') { Install-IconsHandler }
+    Notify-Shell
 }
