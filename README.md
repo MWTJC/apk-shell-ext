@@ -4,7 +4,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 ✅（R-0002）· M2 ✅（R-0005，`splits` 随 M4a）· M3 ✅（R-0006/0009/0010/0011）· M4a ✅（.xapk/.apks/.apkm，R-0011）· M4d ✅（.hap，R-0012）** |
+| 阶段 | **M1 ✅（R-0002）· M2 ✅（R-0005）· M3 ✅（R-0006/0009/0010/0011）· M4 ✅（`.xapk/.apks/.apkm` + `.hap`，R-0011/R-0012/R-0013；范围见 ADR-0006）** |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
 | 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，✅ JSON v1）· `apkprop.dll`（属性页，✅） |
 | 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
@@ -17,7 +17,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 **目标**
 
-1. 大图标 / 超大图标 / 内容视图里，`.apk` 显示的是包内 launcher icon；小图标 / 列表 / 详细信息视图显示**按格式区分的静态图标**（APK / IPA / HAP / AAB / APPX 各一枚，`DefaultIcon`，零调用成本）。
+1. 大图标 / 超大图标 / 内容视图里，安装包显示的是自己的 launcher icon（APK / XAPK / HAP）；小图标 / 列表 / 详细信息视图显示**按格式区分的静态图标**（APK / XAPK / HAP 各一枚，`DefaultIcon`，零调用成本）。
 2. 未打开过安装包的目录，浏览、滚动、排序、悬停**一次都不读原文件**（性能与未安装本扩展时相同）。
 3. 右键属性多出「安装包信息」页：包名、应用名、版本、SDK、ABI、密度、语言、权限、签名摘要、哈希；**打开页面才开始解析**，页面先出、字段渐进填充。
 
@@ -83,11 +83,11 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 | --- | --- |
 | [docs/design.md](docs/design.md) | **设计出发点**：调用频率、进程边界、冷热分离、可度量、既有方案实测 |
 | [docs/architecture.md](docs/architecture.md) | 组件与进程边界、三个产物契约、JSON schema、注册表契约、缓存 |
-| [docs/formats.md](docs/formats.md) | APK/APKS/XAPK/APKM/AAB/IPA/HAP/APPX 的容器与图标位置矩阵、安全限额 |
+| [docs/formats.md](docs/formats.md) | APK/XAPK/HAP 的容器与图标位置矩阵、安全限额（AAB/IPA/APPX 按 ADR-0006 不做，结构保留备查） |
 | [docs/roadmap.md](docs/roadmap.md) | **实现阶段 M0–M5**、每阶段交付/验收/退出条件、风险登记 |
 | [docs/verification.md](docs/verification.md) | 把「无感」变成可测判据：ProcMon 配方、耗时与内存预算、记录表（R-0002 = M1 实测） |
 | [docs/m3-property-page.md](docs/m3-property-page.md) | **M3 属性页**：设计方案（已评审）+ 实施记录（`IShellExtInit` 硬要求、图标退路、实测数字） |
-| [docs/adr/](docs/adr/README.md) | 架构决策记录（5 条；前四条冻结，0005 由 M1 实测得出） |
+| [docs/adr/](docs/adr/README.md) | 架构决策记录（6 条；0001–0004 冻结，0005 由 M1 实测得出，0006 是格式范围收敛） |
 
 ## 当前状态
 
@@ -146,14 +146,16 @@ PUBG（1.25 GB）缩略图 35/20 ms（冷/热）、worker 9.5–12.4 ms；2/2 �
 图标走 `$media:` 三级启发式（名字 → layered json 的 `foreground`/`background` 键名 → `startWindowIcon`/约定名/最大 PNG）。
 JSON 新增 `hap` 块（模块 / 主 Ability / min-targetAPI / 编译 SDK / 设备类型 / Ability 计数 / labelRef），
 **不把鸿蒙 API 号塞进 `app.minSdk/targetSdk`**；属性页有模块/API/设备类型/Ability/权限，签名行如实写"未解析"。
-实测：两个 HAP 与 `module.json` 交叉校验 2/2、缩略图 41 ms（经 shell 87/61 ms）、属性页 156–172 ms、worker < 2 ms。
-**不做**：`$string:` 标签（要解 RestoolV2 的 `resources.index`）、layered 合成、`.hsp`/`.app` 套件、HAP 签名块。
+**应用名**：`$string:` 引用现在会去 `resources.index`（RestoolV2）取默认配置的值，优先用 `mainElement` 那个 Ability 的 `label`
+（鸿蒙桌面显示的就是它）——实测 `刷题宝`、`LibreTV`，与独立 Python 解析器交叉校验 2/2。
+实测：两个 HAP 与 `module.json` 交叉校验 2/2、缩略图 41 ms（经 shell 87/61 ms）、属性页 156 ms、worker < 2 ms。
+**未实现**（信息页对这类功能一律直接写"未实现"，不解释原因）：layered 合成、HAP 签名块、`.hsp`/`.app` 套件。
 
 **下一步（建议顺序）**
 
-1. M4e：`.appx/.msix`（XML 清单 + 限定符选图，估 0.5 d，最便宜的一块）。
-2. M4b：`.aab`（protobuf manifest，最贵的一块）→ M4c `.ipa`（binary plist / Assets.car）。
-3. HAP 增强（可选）：`resources.index` 解析 → 应用名与 id→文件名映射；layered icon 合成。
+1. M5 交付打磨：安装器（一次 UAC）、VERSIONINFO、三枚格式差异化 ico、诊断开关、中英文、缓存清理。
+2. HAP 增强（可选，非阻塞）：layered icon 合成（前景+背景叠加）、`$media:<id>` 的 id→文件名映射、`.hsp`/`.app` 套件。
+3. 已明确不做：[ADR-0006](docs/adr/0006-format-scope-cut.md) 收敛掉 `.aab/.ipa/.appx/.msix`。
 4. M3 / M2 尾巴（用户 2026-11-04 明确说"算边缘情况，等遇到问题再说"）：真实 150%/200% 人眼确认、
    TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
 

@@ -11,7 +11,7 @@ flowchart LR
     M0["M0 文档与基线<br/>(当前)"] --> M1["M1 缩略图闭环<br/>仅 .apk"]
     M1 --> M2["M2 解析核心 + worker<br/>JSON v1"]
     M2 --> M3["M3 属性页<br/>异步填充"]
-    M3 --> M4["M4 全格式<br/>APKS/AAB/IPA/HAP/APPX"]
+    M3 --> M4["M4 格式<br/>APKS/HAP"]
     M4 --> M5["M5 交付打磨<br/>安装器/签名/回归"]
 ```
 
@@ -21,7 +21,7 @@ flowchart LR
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
 | M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | ✅ 完成（2026-11-04）：JSON + aapt2 交叉校验、TD-001 关闭、签名块、features、`splits`（随 M4a）全部落地；仅剩 TD-002 与 V8 回归 |
 | M3 | 属性页 | `apkprop.dll`（原生控件、异步、错误态、复制、可折叠分组） | 2–3 d | ✅ 用户已验收（[R-0006](verification.md)·[R-0009](verification.md)·[R-0010](verification.md)）；DPI 由布局单测覆盖（[R-0011](verification.md)） |
-| M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | 🟡 M4a ✅（.xapk/.apks/.apkm，[R-0011](verification.md)）· M4d ✅（.hap，[R-0012](verification.md)）；M4b/M4c/M4e 未开始 |
+| M4 | 格式 | `.apk` 家族 + `.hap`（其余格式按 [ADR-0006](adr/0006-format-scope-cut.md) 不做） | 6–9 d → 实做 2–3 d | ✅ 完成：M4a（[R-0011](verification.md)）· M4d（[R-0012](verification.md)/[R-0013](verification.md)） |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
 
 **M0 评审记录（2026-11-03）**——三项决策已确认，后续实现不得再讨论：
@@ -224,7 +224,9 @@ flowchart LR
 | 150%/200% DPI、100 次开关句柄、卸载 diff | ✅ DPI 由布局纯函数 20,832 组合断言覆盖；100 次开关实测句柄无增长（[R-0011](verification.md)）；真实缩放渲染未做人眼确认 |
 | 中英双语 | ⬜ M5 |
 
-## M4 · 全格式
+## M4 · 全格式（范围已收敛，见 [ADR-0006](adr/0006-format-scope-cut.md)）
+
+> v1 只做 `.apk` 家族与 `.hap`；`.aab/.ipa/.appx/.msix` **不做**（用户 2026-11-04 决定）。
 
 **M4a 实施记录（2026-11-04，记录 [R-0011](verification.md)）**
 
@@ -249,29 +251,30 @@ flowchart LR
 - 判定顺序改成 HAP 优先：根上有 `module.json` 且没有 `AndroidManifest.xml` → HAP；否则走 APK / 容器。
   三条路径（缩略图、worker、属性页）仍然共用同一份判定与同一个 `ZipReader`。
 - JSON 增加 `hap` 块；**不把鸿蒙 API 号塞进 `app.minSdk/targetSdk`**；属性页技术组显示
-  模块 / 主 Ability / API 版本 / 编译 SDK / 设备类型 / Ability 计数，文件组显示「安装包类型 HAP（鸿蒙）」
-  与「名称引用 `$string:app_name`（v1 不解析）」。
+  模块 / 主 Ability / API 版本 / 编译 SDK / 设备类型 / Ability 计数，文件组显示「安装包类型 HAP（鸿蒙）」。
 - `register.ps1` 默认扩展名加 `.hap`。新增 `tests/verify_hap.py`（对 `module.json` + 图标字节/尺寸交叉校验）。
-- **v1 明确不做**：`$string:` 标签解析（要解 `resources.index`，RestoolV2 私有格式）、layered icon 的合成
-  （只取 foreground 层）、`.hsp`/`.app` 多模块套件。拿到更多样本前不要扩大承诺。
+- **应用名（R-0013，2026-11-04）**：`$string:` 引用改成去 `resources.index`（RestoolV2）取默认配置的值，
+  来源优先 `mainElement` 那个 ability 的 `label`（鸿蒙桌面显示的是它），再退 `app.label`。
+- **v1 不做**：layered icon 的合成（只取 foreground 层）、`.hsp`/`.app` 多模块套件、HAP 签名块。
 
 按"复用成本从低到高"排序，每个子阶段独立验收：
 
 | 子阶段 | 内容 | 估时 | 关键验收 |
 | --- | --- | --- | --- |
 | M4a | `.apks/.xapk/.apkm`（外层 ZIP + base.apk；`icon.png` 兜底） | 1 d | ✅ 2026-11-04（[R-0011](verification.md)）：2 个真实 xapk 与 aapt2 一致、Explorer 里出图标、属性页有「分包」组 |
-| M4b | `.aab`（`BundleConfig.pb`、**protobuf manifest**、`resources.pb`） | 2–3 d | 3 个 AAB：包名/版本/模块列表正确；图标与 bundletool 生成的一致 |
-| M4c | `.ipa`（binary plist；AppIcon 约定名 → iTunesArtwork → `Assets.car` 回退） | 2 d | 3 个 IPA：bundleId/版本正确；≥ 2 个能出高清图标（car 失败要能回退） |
-| M4d | `.hap`（`module.json`；`$media:` → `resources.index` 启发式 → 索引解析） | 2–3 d | ✅ 2026-11-04（[R-0012](verification.md)）：2 个真实 HAP 与 `module.json` 一致、Explorer 出图标、属性页有模块/API/权限组；`$string:` 标签与 layered 合成未做 |
-| M4e | `.appx/.msix`（`AppxManifest.xml` + 限定符选图） | 0.5 d | 2 个包正确 |
+| M4b | `.aab`（protobuf manifest、`resources.pb`） | — | **不做**（[ADR-0006](adr/0006-format-scope-cut.md)：Play 发布格式、不能直接安装；有实际需求再开） |
+| M4c | `.ipa`（binary plist / `Assets.car`） | — | **不做**（[ADR-0006](adr/0006-format-scope-cut.md)：苹果生态） |
+| M4d | `.hap`（`module.json`；`$media:` → `resources.index` 启发式 → 索引解析） | 2–3 d | ✅ 2026-11-04（[R-0012](verification.md)）：2 个真实 HAP 与 `module.json` 一致、Explorer 出图标、属性页有模块/API/权限组、应用名解析为真名（R-0013） |
+| M4e | `.appx/.msix` | — | **不做**（[ADR-0006](adr/0006-format-scope-cut.md)：已安装包图标由系统提供） |
 
 **验收（跨格式）**
 
 - 一个混合目录（每种格式 ≥ 5 个）滚大图标视图：不崩、无卡顿尖峰（ETW 里单次 `GetThumbnail` ≤ 300 ms）；
-- 每种格式的属性页字段与对应官方工具（bundletool / aapt2 / plutil / hvigor）抽查一致；
+- 每种格式的属性页字段与对应官方工具（aapt2 / 容器 ZIP 与 module.json）抽查一致；
 - 格式识别不依赖扩展名（嗅探容器），扩展名只用于注册表路由。
 
-**退出条件**：六类格式的"图标 + 属性页"都能工作，负缓存与错误文案覆盖到新格式。
+**退出条件**：v1 范围（`.apk/.xapk/.apks/.apkm/.hap`）的"图标 + 属性页"都能工作，负缓存与错误文案覆盖到新格式。
+**M4 状态**：✅ 完成（M4a R-0011 · M4d R-0012/R-0013；其余子阶段按 ADR-0006 不做）。
 
 ## M5 · 交付打磨
 
@@ -282,7 +285,7 @@ flowchart LR
 3. 诊断开关（`%TEMP%\apk-shell-ext.debug.on` 时写日志，参照果核的做法）。
 4. 中英文资源；高 DPI 全面回归。
 5. 缓存清理工具（`tools\clearcache.ps1` 或 `apkinfo.exe --clear-cache`）。
-6. 评估 `IExtractIcon`（小图标视图）与 MSIX：只做结论，不默认实现（需改 ADR-0001）。
+6. 评估 `IExtractIcon`（小图标视图）：只做结论，不默认实现（需改 ADR-0001）。
 7. 更新全部文档与验收记录。
 
 **验收**

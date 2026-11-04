@@ -8,14 +8,16 @@
 | 格式 | 容器 | manifest | 资源表 | 图标位置 | 难度 | 阶段 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `.apk` | ZIP | `AndroidManifest.xml`（**二进制 AXML**） | `resources.arsc`（二进制） | `res/mipmap-*/ic_launcher.*`，adaptive 在 `mipmap-anydpi-v26/*.xml` | 中 | M1/M2 |
-| `.apks` / `.xapk` / `.apkm` | ZIP 套 ZIP | 内层 `base.apk` | 同上 | 同上（取 base） | 低（多一层） | M4 |
-| `.aab` | ZIP | `base/manifest/AndroidManifest.xml`（**protobuf**，Bundle 格式） | `base/resources.pb`（protobuf） | `base/res/mipmap-*/…`，索引在 `resources.pb` | **高** | M4 |
-| `.ipa` | ZIP | `Payload/*.app/Info.plist`（XML 或 binary plist） | 无 | `Payload/*.app/AppIcon*.png` 或 `Assets.car` | 中高（`.car`） | M4 |
-| `.hap` | ZIP | `module.json`（JSON） | `resources.index`（**鸿蒙二进制索引**） | `resources/base/media/*.png`，由 `$media:` 引用 | 高 | M4 |
-| `.appx` / `.msix` | ZIP | `AppxManifest.xml`（XML） | 无 | `Assets\Square44x44Logo*.png`（含 scale/contrast 限定符） | 低 | M4 |
-| `.appxbundle` | ZIP 套 ZIP | 内层 `*_x64.appx` | 无 | 同上 | 低 | M4（可选） |
+| `.apks` / `.xapk` / `.apkm` | ZIP 套 ZIP | 内层 `base.apk` | 同上 | 同上（取 base） | 低（多一层） | M4a ✅ |
+| `.aab` | ZIP | `base/manifest/AndroidManifest.xml`（**protobuf**，Bundle 格式） | `base/resources.pb`（protobuf） | `base/res/mipmap-*/…`，索引在 `resources.pb` | 高 | **不做**（[ADR-0006](adr/0006-format-scope-cut.md)） |
+| `.ipa` | ZIP | `Payload/*.app/Info.plist`（XML 或 binary plist） | 无 | `Payload/*.app/AppIcon*.png` 或 `Assets.car` | 中高（`.car`） | **不做**（[ADR-0006](adr/0006-format-scope-cut.md)） |
+| `.hap` | ZIP | `module.json`（JSON） | `resources.index`（**鸿蒙二进制索引**） | `resources/base/media/*.png`，由 `$media:` 引用 | 中（RestoolV2 索引） | M4d ✅ |
+| `.appx` / `.msix` | ZIP | `AppxManifest.xml`（XML） | 无 | `Assets\Square44x44Logo*.png`（含 scale/contrast 限定符） | 低 | **不做**（[ADR-0006](adr/0006-format-scope-cut.md)） |
+| `.appxbundle` | ZIP 套 ZIP | 内层 `*_x64.appx` | 无 | 同上 | 低 | **不做**（[ADR-0006](adr/0006-format-scope-cut.md)） |
 
-**关键差异**：AAB 的 manifest 不是 AXML 而是 **protobuf**；HAP 的资源不是 `arsc` 而是鸿蒙自己的 `resources.index`。这两条决定了"一个 ZIP+AXML 解析器通吃"的假设不成立，必须分开写 reader。
+**关键差异**：HAP 的资源不是 `arsc` 而是鸿蒙自己的 `resources.index`（RestoolV2），必须有独立 reader。
+**范围**：v1 只实现 `.apk` 家族与 `.hap`；`.aab/.ipa/.appx/.msix` 由 [ADR-0006](adr/0006-format-scope-cut.md) 明确不做，
+下面几节的结构知识保留，供将来真要做时不重新调研。
 
 ## 2. APK（M1/M2 主战场）
 
@@ -43,14 +45,19 @@
   `PUBG ...APKPure.xapk`（1.25 GB，base 107 MB + 1.1 GB obb，只读 base）。两个包与 `aapt2 dump badging`
   的 package/versionCode/versionName 完全一致（`tests/verify_container.py`）。
 
-## 3. AAB（Android App Bundle）
+## 3. AAB（Android App Bundle）——**不实现**（[ADR-0006](adr/0006-format-scope-cut.md)）
+
+> 保留本节只为记录结构；v1 不读 AAB。用户 2026-11-04 决定：AAB 是 Play 的发布格式、
+> 不能直接安装，分发侧已经是 `.xapk/.apkm/.apks`（已支持），磁盘上只剩开发者构建产物。
 
 - 结构：`BundleConfig.pb` + `base/manifest/AndroidManifest.xml` + `base/resources.pb` + `base/res/…` + 各模块目录（`feature1/…`）。
 - **manifest 与资源表都是 protobuf**（`Resources.proto` / `Bundle` 的 `XmlNode` 定义），不能用 AXML 解析器。方案：把 `.proto` 编译进 worker（`protobuf-lite` 或 hand-written decoder），M4 先只支持 `base` 模块。
 - 图标：manifest 里 `android:icon` 同样是资源引用 → 在 `resources.pb` 里查 ID → 得到 `base/res/mipmap-*/…` 路径 → 从 ZIP 读。
 - 属性页可额外显示：模块列表（base/feature）、`delivery` 条件（设备/语言/密度）。
 
-## 4. IPA
+## 4. IPA——**不实现**（[ADR-0006](adr/0006-format-scope-cut.md)）
+
+> 保留本节只为记录结构；v1 不读 IPA（苹果生态，Windows 上只出现在助手/越狱工具目录）。
 
 - `Payload/<Name>.app/Info.plist`：可能是 XML plist，也可能是 **binary plist**（`bplist00`）；两种都要解。
 - 图标优先级：`CFBundleIcons` / `CFBundleIcons~ipad` 里声明的文件名 → `AppIcon60x60@2x.png` 等约定名 → `iTunesArtwork@2x` → **`Assets.car`**（编译后的资产目录，需解析 CgBI/asset catalog 格式）。
@@ -82,7 +89,9 @@
   `entry-default-unsigned.hap`（`$media:app_icon` → app_icon 512²，2.3.6，3 条 ohos 权限，4 种设备类型）；
   两个包与 `module.json` 的交叉校验 2/2 一致（`tests/verify_hap.py`）。
 
-## 6. APPX / MSIX
+## 6. APPX / MSIX——**不实现**（[ADR-0006](adr/0006-format-scope-cut.md)）
+
+> 保留本节只为记录结构；v1 不读 APPX/MSIX（已安装的商店应用图标由系统提供）。
 
 - `AppxManifest.xml` 是普通 XML（`uap:VisualElements` 的 `Square44x44Logo`）。
 - 图标资产带限定符：`Assets\Square44x44Logo.scale-200.png`、`.targetsize-44_altform-unplated.png` 等；选取规则：优先 `targetsize-<n>` 接近 44，其次 `scale-400/200/100`。
@@ -112,13 +121,12 @@ candidates = 各格式 reader 产出的 (资源路径, 密度/尺寸, 是否 ada
 | 名称非法字符 | 一律按 ordinal 处理，不落盘 | 防 NTFS 特殊名/ADS |
 | 解析总时限 | worker 8 s 自杀 | 防挂死 |
 
-## 9. 实现优先级
+## 9. 实现状态（v1 收口）
 
-| 顺序 | 格式 | 理由 |
+| 顺序 | 格式 | 状态 |
 | --- | --- | --- |
-| 1 | `.apk` | 覆盖 80% 场景，且 M1 就要用 |
-| 2 | `.apks/.xapk/.apkm` | 只多一层 ZIP，复用 APK reader |
-| 3 | `.aab` | 开发者常用，但需要 protobuf，单独排期 |
-| 4 | `.ipa` | 图标来源复杂（Assets.car），先做回退路径 |
-| 5 | `.hap` | 资源索引非标准，先启发式 |
-| 6 | `.appx/.msix` | 最简单，顺手做 |
+| 1 | `.apk` | ✅ M1/M2（R-0002/R-0004/R-0005） |
+| 2 | `.apks/.xapk/.apkm` | ✅ M4a（R-0011） |
+| 3 | `.hap` | ✅ M4d（R-0012；应用名解析 R-0013） |
+| — | `.aab` | **不做**（ADR-0006；有实际需求再开） |
+| — | `.ipa` / `.appx` / `.msix` | **不做**（ADR-0006） |

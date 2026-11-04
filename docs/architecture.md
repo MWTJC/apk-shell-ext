@@ -14,10 +14,10 @@ flowchart LR
         TC[("thumbcache<br/>系统缩略图库")]
     end
     subgraph WORKER["apkinfo.exe（独立进程）"]
-        CORE["解析核心<br/>zip / AXML / ARSC / proto / plist / HAP index"]
+        CORE["解析核心<br/>zip / AXML / ARSC / HAP index"]
         JSON["JSON v1 输出"]
     end
-    FS[("CSS 路径上的<br/>.apk / .aab / .ipa / .hap")]
+    FS[("CSS 路径上的<br/>.apk / .xapk / .hap")]
 
     TH -- 冷缓存时直接读少量字节 --> FS
     TH --> TC
@@ -47,7 +47,7 @@ flowchart LR
 | 实现接口 | `IThumbnailProvider` + `IInitializeWithStream`（隔离宿主）+ `IInitializeWithItem` / `IInitializeWithFile`（进程内） |
 | 导出 | 仅 `DllGetClassObject` / `DllCanUnloadNow`（+ 安装器用的 `DllRegisterServer` / `DllUnregisterServer`，或由脚本写注册表二选一，M1 定：**由 `tools\register.ps1` 写注册表**，DLL 不导出注册函数） |
 | CLSID | `{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B01}`（勿与 HashTab `{8A56567E-…}`、果核 `{9179448A-…}` 混淆） |
-| 支持扩展 | `.apk .apks .xapk .apkm`（v1）；后续加 `.aab .ipa .hap .appx` 只需注册表指向同一 CLSID，代码按扩展分派 |
+| 支持扩展 | `.apk .xapk .apks .apkm .hap`（v1 定稿）；新增格式只需注册表指向同一 CLSID + 代码里加一个分支（`.aab/.ipa/.appx` 按 [ADR-0006](adr/0006-format-scope-cut.md) 不做） |
 | 输出 | `HBITMAP`（32bpp ARGB，`WTSAT_ARGB`）；建议 256×256 源图缩放到请求尺寸 |
 | 超时 | 300 ms 软上限：超时/异常返回 `E_FAIL`，Explorer 显示默认图标；同一文件 24 h 内不再重试（失败标记） |
 | 缓存 | 自己写 `%LOCALAPPDATA%\apk-shell-ext\thumbs\<sha1(path+size+mtime)>.png`；命中直接解码，不打开原文件 |
@@ -170,10 +170,7 @@ aapt2 会额外打印"隐含特性"（默认 faketouch、屏幕方向、由权�
 | --- | --- | --- |
 | `.apk` | `icons\apk.ico` | 安卓机器人轮廓 + "APK" |
 | `.apks` `.xapk` `.apkm` | `icons\apks.ico` | 同族，标注分包 |
-| `.aab` | `icons\aab.ico` | "AAB" |
-| `.ipa` | `icons\ipa.ico` | 苹果轮廓 + "IPA" |
 | `.hap` | `icons\hap.ico` | "HAP" |
-| `.appx` `.msix` | `icons\appx.ico` | "APPX" |
 
 - 每个 ico 内含 16/24/32/48/256 五档，`DefaultIcon` 只写文件路径（`"%ProgramFiles%\apk-shell-ext\icons\apk.ico",0`）。
 - **不实现 `IExtractIcon`**（ADR-0001）；`DefaultIcon` 是 Explorer 自己读资源，零调用成本。

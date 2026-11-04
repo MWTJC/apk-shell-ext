@@ -973,3 +973,66 @@ hap_no_icon.hap      apkinfo exit=0  元数据正常，warnings = 未找到可�
 4. **`libs/<abi>/*.so`**：两个样本都不带原生库，`abis` 的那段代码没有被真实数据覆盖。
 5. **HAP 签名**：鸿蒙的签名块没有解析，页面如实写"未解析"，不是"未签名"。
 6. `resources.index` 里的 id→文件名映射（`$media:16777218` 这类）没有实现。
+
+## 21. R-0013 记录（HAP 应用名解析 + 范围裁剪 + "未实现"口径，2026-11-04）
+
+### 变更
+
+1. **范围裁剪**：[ADR-0006](adr/0006-format-scope-cut.md)——v1 只做 `.apk/.xapk/.apks/.apkm/.hap`；
+   `.aab` 不做（有实际需求再开 ADR），`.ipa/.appx/.msix` 不做。formats/roadmap/architecture/design/README 已同步。
+2. **HAP 应用名**：`src/core/hap.cpp` 增加对 `resources.index`（RestoolV2）的只读解析，
+   把 `$string:NAME` 解成默认配置里的 UTF-8 值；来源优先 `mainElement` 那个 Ability 的 `label`，
+   再退 `app.label`（鸿蒙桌面显示的是前者）。
+3. **信息页口径**：未实现的功能一律直接写"未实现"（HAP 的「签名」行），不再向用户解释解析现状；
+   应用名解出来后删掉「名称引用」行，也不再往 warning 里塞"HAP 签名块未解析"这类解释性文案。
+
+### 索引格式的依据（不是猜的）
+
+`resources.index` 的布局取自 restool 自己的读写实现
+（`openharmony/developtools_global_resource_tool` 的 `include/resource_table.h` 与 `src/resource_table.cpp`，
+`ReadNewFileHeader` / `ReadIdSetHeader` / `ReadResources` / `ReadResourceItem`）：
+
+```
+IndexHeaderV2 {version[128], length, keyCount, dataBlockOffset}
+KeyConfig     {"KEYS", configId, keyCount, KeyParam[keyCount]}
+IdSetHeader   {"IDSS", length, typeCount, idCount}
+ResTypeHeader {resType, length, count}
+ResIndex      {resId, offset, length, name[length]}
+ResInfo@offset{resId, length, valueCount} + valueCount × {configId, dataOffset}
+值 @dataOffset: u16 长度 + UTF-8
+```
+
+两个实测细节（踩过才知道）：
+
+- 字符串资源的 `resType` 是 **9**，且 **id 的高字节不编码类型**（第一次按 `resId >> 24 == resType` 匹配是错的；
+  两个样本都是 `0x0100xxxx` 连续编号）。
+- 桌面显示的名字来自 **Ability 的 label**：刷题宝的 `app_name` 是 `ShuaTi`，而 `EntryAbility_label` 才是 `刷题宝`。
+
+### 结果
+
+```
+$ python tests/verify_hap.py "tests/fixtures/real/*.hap"
+  entry-default-unsigned.hap: com.libretv.panpp 2.3.6 label='LibreTV' (1100140) module=entry
+      icon=resources/base/media/app_icon.png [png 512x512] 0.47 ms
+  ShuaTiBao108.hap: com.xm.ShuaTi 1.0.0 label='刷题宝' (1000000) module=entry
+      icon=resources/base/media/foreground.png [png 512x512] 0.6 ms
+2/2 HAP matched module.json cross-check
+```
+
+`verify_hap.py` 里的 label 交叉校验是**独立的 Python 解析器**（同一套结构、另写一遍），不是回读我们自己的输出。
+
+属性页（`docs/evidence/m4d-hap-propsheet.png`）：头部 `刷题宝 / com.xm.ShuaTi / 1.0.0 (1000000)`，
+应用名 = 刷题宝，技术组 模块 entry（entry）/ 主 Ability EntryAbility / API min 60000020 / 编译 SDK 6.0.0.47 /
+设备 phone / 组件 Ability 1 · Extension 1 / 图标 512×512，文件组 `安装包类型 HAP（鸿蒙）`、`签名 未实现`，
+**156 ms** 出全页。
+
+回归：`propsheet_model_test --selftest` 50 ok / 0 fail；`apkinfo` 6/6（fixtures）+ 3/3（真实 apk）；
+容器 2/2；HAP 2/2；签名 3/3；`thumbtest --dir` 仍是 1 个预期失败（`f_noicon.apk`）。
+
+### 未验证
+
+1. **多语言 / 限定词**：只取"默认配置"（`keyCount == 0` 的 configId）的值；中文/深色等限定配置不参与选择。
+   两个样本里 `start_window_background` 有 `cfg0/cfg1` 两条，说明该结构确实会被用到，但我们没有多语言样本可验。
+2. **Restool v1 老索引**（版本串 `"Restool "` 而非 `"RestoolV2 "`）：代码只认 v2，v1 包会走"应用名未解析"。
+3. `$media:<资源 id>`（layered 里那种）的 id→文件名映射仍没做，只按 JSON 键名推断。
+4. `.hsp` / `.app` 多模块套件、HAP 签名块：均未实现（信息页写"未实现"）。

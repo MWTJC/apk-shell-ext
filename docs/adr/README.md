@@ -10,6 +10,7 @@
 | [0003](0003-out-of-proc-parser.md) | 全量解析放独立 worker 进程，DLL 只做 UI/IPC | 已采纳 | M2/M3 |
 | [0004](0004-stack-and-dependency-boundary.md) | C++20 / MSVC / CMake / 静态 CRT / WTL；禁止 MFC、Qt、.NET、自有解码器 | 已采纳（禁止项） | M1 |
 | [0005](0005-isolated-thumbnail-host-and-stream-input.md) | 缩略图在 dllhost 隔离宿主里跑、输入是 IStream；解析核心改为 ByteSource，流模式缓存键含中央目录摘要 | 已采纳（M1 实测得出） | M1 |
+| [0006](0006-format-scope-cut.md) | 格式范围收敛：只支持 `.apk/.xapk/.apks/.apkm/.hap`，**不做** `.aab/.ipa/.appx/.msix` | 已采纳（2026-11-04） | M4 |
 
 ## 写作规则
 
