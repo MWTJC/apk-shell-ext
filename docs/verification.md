@@ -1177,3 +1177,231 @@ out\x64\thumbtest.exe --shell --file ShuaTiBao108.hap                54.99 ms
    属性页验收改用真实资源管理器对话框截图。
 6. 真实 150% / 200% DPI 人眼确认：仍按用户 2026-11-04 的决定挂起。
 7. 英文长文案截断：`Components` 行在窄窗口被省略号截断（tooltip 可看全），中文同级文案不会。
+
+## 23. R-0015 记录（格式图标 v2：换成"纸页 + 色带"样式，2026-11-04）
+
+### 环境
+
+与 §0 基线一致。样本：`aida64-1.94.apk`（8.0 MB）、`ShuaTiBao108.hap`（409 KB）、
+`Poweramp+…xapk`（21.6 MB），复制成 `sample.apk / sample.hap / sample.xapk` 放进一个空目录。
+本机已按用户安装（`%LOCALAPPDATA%\Programs\apk-shell-ext`）；换图后覆盖安装目录里的 `icons\*.ico`，
+按 FAQ 删 `IconCache.db` + `iconcache_*.db` 并重启 `explorer.exe`。
+
+### 变更
+
+1. 以用户给的参考图（512×512，按用户要求**不入库**）为样式依据，三枚 ico 重画：
+   **一页纸 + 右上折角 + 横跨纸边的色带 + 白字**。
+   `.apk` 与 `.apks/.xapk/.apkm` 统一安卓绿（纸 `#AACC34` / 带 `#5FB74B`）；`.hap` 保留红色家族
+   （纸 `#FA8578` / 带 `#C62A45`）以便仍能在列表里分开。几何按 512 px 参考图量出，
+   写成 `tools\gen_icons.py` 顶部的常量（`SHEET` / `SHEET_RADIUS` / `FOLD` / `BAND_*` / `CAP_HEIGHT`）。
+2. 单页 vs 多页：`.apk` 用折角；容器用"两页错开"。16/24/32 px 固定 2 px 台阶——按 5% 算只有 1 px，
+   两页会糊成一张（先按 5% 出过一版，16 px 下与 `.apk` 完全同形）。
+3. 字形换 **Nunito Black**（SIL OFL）：`tools\fonts\Nunito-Variable.ttf` + `OFL-Nunito.txt` 入库，
+   `--font` 可覆盖，字体缺失时退 Segoe UI Black 并告警。参考图的圆头笔画只有圆体像，
+   Segoe UI Black 是平头（对照过 Segoe UI Black / Nunito 900 / Rubik 800 / Baloo2 800，Nunito 900 最接近）。
+4. 新增手工工具 `tools\icon_probe.ps1`：用 `SHGetFileInfo` 取 16/32 px 的 HICON 存 PNG，
+   核对"Explorer 实际画的到底是哪一档"。不进构建、不设闸门。
+
+### 结果 · 生成与解码
+
+```
+$ uv run --with pillow python tools/gen_icons.py --preview
+wrote D:\Ai Playground\apk-shell-ext\icons\apk.ico (17226 bytes, sizes (16, 24, 32, 48, 256))
+wrote D:\Ai Playground\apk-shell-ext\icons\apks.ico (18948 bytes, sizes (16, 24, 32, 48, 256))
+wrote D:\Ai Playground\apk-shell-ext\icons\hap.ico (16306 bytes, sizes (16, 24, 32, 48, 256))
+wrote D:\Ai Playground\apk-shell-ext\icons\_preview.png
+```
+
+- WIC（`PresentationCore` 的 `BitmapDecoder`，与 shell 同一条解码链）：
+  `icons\apk.ico: 5 frames -> 16x16, 24x24, 32x32, 48x48, 256x256`，apks / hap 同。
+- **坑**：`System.Drawing.Icon(path, 256, 256)` 只回到 48×48——GDI+ 不认 PNG 压缩的 256 帧，
+  用它验收会误判成"没有 256 档"。要验帧必须走 WIC。
+- 安装器：`ISCC /Q installer\apk-shell-ext.iss` → exit=0，
+  `out\dist\apk-shell-ext-setup-1.0.0.exe` **2,166,594 字节**（旧图版本 2,181,910），
+  说明 `SetupIconFile` 也接受这套 ico。
+
+### 结果 · Explorer 真的画了新图
+
+```
+$ powershell -File tools\icon_probe.ps1 -Dir <showcase> -Out <probe>
+sample.apk -> sample.apk-small.png (16x16)
+sample.apk -> sample.apk-large.png (32x32)
+sample.hap -> sample.hap-small.png (16x16)
+sample.hap -> sample.hap-large.png (32x32)
+sample.xapk -> sample.xapk-small.png (16x16)
+sample.xapk -> sample.xapk-large.png (32x32)
+```
+
+- 取回的 HICON 与生成器同尺寸帧**逐像素比对一致**（`ImageChops.difference` 的 bbox 为空，
+  通道最大偏差 ≤3/255，属 HICON→Bitmap 的取整）：即 `DefaultIcon` → 新 ico → 对应档位，整条链通，
+  没有回退到通用文件图标。
+- 实拍：`docs/evidence/icon-v2-defaulticons-details.png` + `-zoom.png`（详细信息视图，16 px：
+  `.apk` 绿单页、`.xapk` 绿双页、`.hap` 红单页；截图用 `PrintWindow(PW_RENDERFULLCONTENT)`，
+  窗口被挡在前面也能拍到）。
+- 对照表：`docs/evidence/icon-v2-sizes.png`（每档 1:1 + 3–6× 放大）。
+
+### 未验证 / 已知取舍
+
+1. 16 px 下 `.apk` 与 `.apks` 只差 2 px 台阶（颜色按要求统一成绿），密集列表里容易混。
+   要不要给容器加独立标记（角标 / 双色带 / 换字母），待定。
+2. 大图标 / 超大图标视图仍是**包内 launcher icon 缩略图**（M1 契约），本次没动缩略图链路；
+   DefaultIcon 的 256 档只确认"帧在、WIC 能解"，没有逐个宿主逐像素验。
+3. 只在本机（Windows 11 26300）看过；150% / 200% DPI 人眼确认仍按用户 2026-11-04 的决定挂起。
+4. `.hap` 是否也要改成绿色：本次按"apk 与 apks 同色"的要求保留红色家族，若要三色归一需要再改 `FAMILIES`。
+
+## 24. R-0016 记录（功能开关 + 撞车询问 + 升级策略，2026-11-04）
+
+### 环境
+
+与 §0 基线一致。本机按用户安装（`%LOCALAPPDATA%\Programs\apk-shell-ext`）；
+本轮多次装卸 + 重启 `explorer.exe`（换图标缓存 / 看开关效果）。
+样本：`aida64-1.94.apk`、`Poweramp+…xapk`、`ShuaTiBao108.hap` 复制到 `show2\` 里看列表视图。
+
+### 变更
+
+1. **两个功能开关**（[ADR-0008](adr/0008-feature-toggles-and-upgrade-policy.md)、[architecture.md §4](architecture.md)）：
+   缩略图 = 5× `.ext\ShellEx\{E357FCCD…}`，静态图标 = 5× `.ext\DefaultIcon`；属性页恒开、无开关。
+   COM 类注册不设开关（活性 CLSID 本身无副作用，保留它"关→开"不必重装）。
+2. **安装期**：`[Tasks]` 的 `thumb` / `icon` + `Check: AllowThumb/AllowIcon`；
+   `CurStepChanged(ssInstall)` 里探测目标机器上"别人的 handler"（CLSID 有活的 `InprocServer32` /
+   `DefaultIcon` 指向真实文件），按功能各弹一次询问，默认按钮 = **否（保持原样）**；
+   静默安装默认同样保持原样，`/OVERWRITE=thumb|icon|all` 才接管。
+3. **运行期**：`apkinfo --features`（查询）/ `--features thumb=off,icon=off,all=on`（改）。
+   只删"指向我们自己"的值（缩略图比 CLSID；图标认 `\icons\<file>` 且文件存在 → 开发态 `out\x64` 也认得出），
+   删完连空壳键一起清；`prop=off` 拒绝并返回 4；改完 `SHChangeNotify(SHCNE_ASSOCCHANGED)`。
+4. **卸载兜底**：`[UninstallRun]` 在删文件前跑 `apkinfo --features all=off`。
+5. **升级**：`UiLanguage` 加 `createvalueifdoesntexist`（不加的话每次升级都把用户选的 `zh`/`en` 顶回 `auto`）。
+
+### 结果 · 关键机制（先做实验，再写代码）
+
+用一次性探针安装器验证了 Inno 的两条行为，它们直接决定方案能不能成立：
+
+```
+探针 1：Check 恒 False 的 [Registry] 条目 → 安装不写；值预置为 foreign
+        → 卸载后 foreign 仍在（该条目没进卸载日志，卸载时也不碰）
+探针 2：Check 为真 → 写入 ours；再把 Check 变成 False 后卸载
+        → 值仍被删（卸载是无条件重放日志，不重新求值 Check）
+```
+
+结论：`Check` 只在安装期求值一次，所以"保持原样 = 压根不写"就等于"卸载也不会碰"，
+**不需要备份/还原机制**（用户 2026-11-04 明确选这条）。
+
+### 结果 · 静默安装矩阵
+
+```
+A) 无冲突（机器上只有我们自己的旧值，外加指向 out\x64 的死值）
+   $ apk-shell-ext-setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES
+   log: stale DefaultIcon ignored on .xapk: "D:\...\out\x64\apks.ico",0   (×4)
+        conflict: no foreign thumbnail handler found
+        conflict: no foreign DefaultIcon found
+        silent install: OVERWRITE= -> thumb takeover=1 icon takeover=1
+   $ apkinfo --features
+   [features] thumb=5/5 icon=5/5 prop=5/5（核心功能，不可关）
+
+B) 伪造"别人占着"（.xapk 缩略图 → 活 CLSID 指向 shell32.dll；.apk DefaultIcon → shell32.dll）
+   不加 OVERWRITE：
+   log: conflict: thumbnails already registered by another program: .xapk {9179448A-…}
+        conflict: file icons already set by another program:       .apk  "C:\Windows\System32\shell32.dll",0
+        silent install: OVERWRITE= -> thumb takeover=0 icon takeover=0
+   注册表：.xapk 缩略图仍 {9179448A-…}，.apk 图标仍 shell32.dll；其余 8 个值是我们的
+   $ apkinfo --features  ->  thumb=4/5 icon=4/5 prop=5/5
+
+C) 同一机器加 /OVERWRITE=all：
+   log: silent install: OVERWRITE=all -> thumb takeover=1 icon takeover=1
+   $ apkinfo --features  ->  thumb=5/5 icon=5/5 prop=5/5
+```
+
+### 结果 · 交互弹窗（真点了）
+
+正式安装器带许可页、自动化点不动，所以用一个**共用同一份探测/询问代码**的精简探针安装器
+（无许可页/无目录页）实跑：`ssInstall` 时弹出询问框，默认按钮是「否(N)」，
+向对话框发 `WM_COMMAND IDNO` 后安装继续且**一个值都没写**：
+
+```
+probe3 report=[    .apk   "C:\Windows\System32\shell32.dll",0 ]
+probe3 decision: takeover=0
+registry conflictprobe3 = (空)     <- Check 为假，条目整条跳过
+```
+
+截图：[docs/evidence/feature-conflict-prompt.png](evidence/feature-conflict-prompt.png)
+（中文系统上正文是英文、按钮是「是/否」——安装器界面只有英文这条老限制，见 §22 未验证 2）。
+
+### 结果 · 开关真的作用到资源管理器
+
+```
+$ apkinfo --features icon=off   -> icon=0/5
+   （清图标缓存 + 重启 explorer）docs/evidence/feature-icons-off-details.png：
+   三个文件全部回到系统通用文件图标
+$ apkinfo --features icon=on    -> icon=5/5
+   docs/evidence/feature-icons-on-details.png：绿单页 / 绿双页 / 红单页 三枚自定义图标回来
+```
+
+### 结果 · 升级与卸载（含一次踩坑）
+
+```
+升级（同一个包再装一次）：
+  log: 将追加到现有卸载日志: …\unins000.dat     （unins000.dat 9,911 → 19,134 字节，没有 unins001.dat）
+  $ apkinfo --lang zh; 再升级一次 -> UiLanguage 仍是 zh   （加 createvalueifdoesntexist 之前是 auto）
+
+空跑/纯属性页安装：
+  $ apk-shell-ext-setup-1.0.0.exe /VERYSILENT /TASKS=""
+  log: apk-shell-ext: install done (thumb=0 icon=0)
+  $ verify-install.ps1 -Phase check -State installed -Features prop   -> ok
+  $ apkinfo --features  ->  thumb=0/5 icon=0/5 prop=5/5
+
+"装了属性页 → 事后用命令打开 → 卸载"（本地第一次跑出来 10 个残留键）：
+  $ apkinfo --features all=on
+  $ unins000.exe /VERYSILENT
+  $ verify-install.ps1 -Phase check -State removed
+  [check] removed : 10 problem(s)   … 全是 .ext\DefaultIcon / .ext\ShellEx\{…} 的空壳键
+```
+
+**原因**：`--features` 当时只删值不删键；声明式回滚里的 `uninsdeletekeyifempty` 只认识"安装时写过的"条目。
+**修法**：`--features` 删除后调用 `DeleteKeyIfEmpty`（等价 `uninsdeletekeyifempty`）。修完重跑：
+
+```
+  [check] removed : ok
+  [snapshot] 19 lines -> snapB.txt
+  [diff] identical (zero residue)
+```
+
+### 未验证 / 已知限制
+
+1. **"别的程序占着"是伪造的**：用活 CLSID 指向 `shell32.dll` + `DefaultIcon` 指向 `shell32.dll` 模拟，
+   没有真装第三方 APK 图标/缩略图工具做交叉验证。
+2. **正式安装器的交互弹窗没有逐步点过**：探针安装器与正式安装器共用同一份 `AskAboutConflicts` /
+   `AllowThumb` / `AllowIcon` 代码，但许可页之后的完整点击流程没自动化。
+3. `/ALLUSERS` 整机安装仍未实跑（沿用 §22 未验证 1）；本轮所有注册表观察都在 `HKCU`。
+4. `/TASKS` 只测了 `""` 与默认两档；`/TASKS="icon"` 这类单项组合没单独跑。
+5. **"我们装好之后又被别的软件接管、再卸载我们"** 会把别人的值删掉——用户 2026-11-04 明确不管
+   （要堵只能把 15 个值全部代码化，ADR-0008 里留了门）。
+6. 版本号仍手写在 `.iss`（`AppVersion=1.0.0`），与 `src/version.h` 未同源；待办。
+
+### 补充 · 升级被 dllhost 挡住（本轮实测出来的坑）
+
+装好并**显示过一次缩略图**之后再跑同一个安装包，静默安装直接失败：
+
+```
+$ apk-shell-ext-setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=f5.log
+exit=5
+log: RestartManager 发现一个使用我们文件之一的应用程序: COM Surrogate
+     可以使用 RestartManager 来避免重启吗？是 (0)
+     用户取消了安装进程。
+
+（加 /CLOSEAPPLICATIONS 也一样）
+log: 使用我们的文件关闭应用程序。
+     某些应用程序无法关闭。
+     用户取消了安装进程。
+```
+
+原因：`apkthumb.dll` 被 COM Surrogate（`dllhost.exe`）加载着，RestartManager 关不掉 surrogate 进程，
+Inno 于是在静默模式下把"无法关闭"当成取消。改 `CloseApplications=force` 后：
+
+```
+$ ... /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=f7.log
+exit=0
+log: 使用我们的文件关闭应用程序。 (forced)
+```
+
+被强关的只有 explorer / dllhost 两个宿主进程（都不承载用户数据），安装后一切正常
+（`verify-install -State installed` ok、`--features` 5/5/5、`install.md` 已更新到新版）。

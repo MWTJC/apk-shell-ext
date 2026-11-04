@@ -19,4 +19,10 @@ int RunDiagCommand(const std::wstring& action);
 // 属性页跑在 explorer.exe 里，收不到环境变量，只能走注册表）
 int RunLangCommand(const std::wstring& action);
 
+// apkinfo --features [thumbs=on|off][,icons=on|off][,all=on|off]
+//   不带参数 = 查询。只动"扩展名表面"那 15 个值（5×ShellEx\{E357FCCD…} + 5×DefaultIcon），
+//   关闭时只删"指向我们自己"的值，别人的值原样留着并如实报告；属性页是核心功能，不可关。
+//   失败（写不进去 / 试图关属性页）返回 4。
+int RunFeaturesCommand(const std::wstring& action);
+
 }  // namespace apksx

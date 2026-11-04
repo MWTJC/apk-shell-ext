@@ -28,20 +28,29 @@ journal 用固定 `wchar_t buf[64]` 拼字符串被截断 → 卸载时键名对
 
 ## 2. 静态格式图标 + `DefaultIcon`
 
+> 2026-11-04 改版（v2）：原来那套"彩色圆角方块 + 白色图形"（绿机器人 / 靛紫双卡 / 红六边形）
+> 换成用户指定的参考样式（参考图不入库，几何常量即事实来源，见 `tools\gen_icons.py` 顶部）——
+> **一页纸 + 右上折角 + 横跨纸边的色带 + 白字**；
+> `.apk` 与多 APK 容器统一用安卓绿。改版记录见 [verification.md R-0015](verification.md)，
+> 对照图 `docs/evidence/icon-v2-sizes.png`、实拍 `docs/evidence/icon-v2-defaulticons-details*.png`。
+
 | 扩展名 | 图标 | 形状 | 颜色 |
 | --- | --- | --- | --- |
-| `.apk` | `icons\apk.ico` | 安卓机器人头 | 绿 |
-| `.xapk` `.apks` `.apkm` | `icons\apks.ico` | 两叠错开的卡片（带缝） | 靛紫 |
-| `.hap` | `icons\hap.ico` | 六边形环 | 红 |
+| `.apk` | `icons\apk.ico` | 单页 + 折角，色带 "APK" | 安卓绿（`#AACC34` / 带 `#5FB74B`） |
+| `.xapk` `.apks` `.apkm` | `icons\apks.ico` | 两页错开（一包多 APK），色带 "XAPK" | 同上 |
+| `.hap` | `icons\hap.ico` | 单页 + 折角，色带 "HAP" | 红（`#FA8578` / 带 `#C62A45`） |
 
-- 由 `tools\gen_icons.py`（Pillow，`uv run --with pillow python tools\gen_icons.py`）生成并**入库**：
+- 由 `tools\gen_icons.py`（Pillow，`uv run --with pillow python tools\gen_icons.py --preview`）生成并**入库**：
   Explorer 运行时直接读文件，构建不依赖 Python。每枚 ico 内含 16/24/32/48/256 五档，
   **每档按自己的分辨率画**（256 缩到 16 会糊成色块）；48 起才画 "APK"/"XAPK"/"HAP" 字样。
-- 证据：`docs/evidence/m5-icons-sizes.png`（每档 1:1 + 4× 放大）、
-  `m5-defaulticons-list.png` / `-zoom.png`（资源管理器列表视图 16 px 实拍）。
-  16 px 下主要靠颜色区分（形状差异在 24 px 起看得出），这是像素数的物理限制，已在
-  `m5-icons-sizes.png` 里留了对照。
+- 字形是 **Nunito Black**（SIL OFL）：字体随仓库走（`tools\fonts\Nunito-Variable.ttf` + `OFL-Nunito.txt`），
+  这样换机器/换系统字体版本都不会让图标漂移；`--font` 可覆盖，缺字体时退到 Segoe UI Black 并告警。
+  参考图的圆头笔画只有圆体才像，Segoe UI Black 是平的——所以宁可信 vendored 字体。
+- 小尺寸取舍：16/24/32 px 下 `.apk` 与 `.apks` 只差"单页 / 两页"的 2 px 台阶（颜色按要求统一成绿），
+  形状差异 24 px 起看得清，这是像素数的物理限制，已在 `icon-v2-sizes.png` 里留了对照。
 - **不做 `IExtractIcon`**（ADR-0001 不变）。理由见 §6。
+- 核对"Explorer 实际拿到的是哪一档"用 `tools\icon_probe.ps1`（`SHGetFileInfo` 取 16/32 px 的 HICON 存 PNG）：
+  手工工具，不进构建、不设闸门。
 
 ## 3. VERSIONINFO
 
@@ -60,6 +69,7 @@ apkinfo.exe --diag on|off|status|clear   诊断日志开关与日志大小
 apkinfo.exe --clear-cache            清空自建缩略图缓存（走 ThumbCache::ClearAll）
 apkinfo.exe --cache-info             缓存文件数/体积/目录
 apkinfo.exe --lang zh|en|auto        属性页界面语言（写 HKCU\Software\apk-shell-ext\UiLanguage）
+apkinfo.exe --features [thumb|icon|all=on|off]   功能开关（ADR-0008；不带参数 = 查询）
 ```
 
 诊断日志开关仍是 `%TEMP%\apk-shell-ext.debug.on`（存在即写 `%LOCALAPPDATA%\apk-shell-ext\apkthumb.log`），

@@ -14,16 +14,37 @@ apk-shell-ext-setup-1.0.0.exe
   `HKCU\Software\Classes`，**不会弹 UAC**。
 - 想给整台机器装：安装器第一页勾"为所有用户安装"（或命令行 `/ALLUSERS`），
   此时会**弹一次 UAC**，文件进 `%ProgramFiles%\apk-shell-ext`。
+- 安装页面里有两项可选能力（默认都勾）：**缩略图**（大图标/超大图标视图显示应用自己的图标）与
+  **文件图标替换**（小图标/列表/详细信息视图把通用图标换成 APK 样式的图标）。
+  属性页是核心功能，没有开关。
+- 如果这台机器上已经有别的程序接管了缩略图或文件图标，安装器会**分别弹一个询问框**，
+  默认按钮是"否（保持原样）"——不动别人的设置；想换成本程序就选"是"。
 - 静默安装（脚本/批量）：
 
   ```bat
   apk-shell-ext-setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
   apk-shell-ext-setup-1.0.0.exe /VERYSILENT /ALLUSERS      :: 整机，需要提权
   apk-shell-ext-setup-1.0.0.exe /VERYSILENT /DIR="D:\Tools\apk-shell-ext"
+  apk-shell-ext-setup-1.0.0.exe /VERYSILENT /TASKS=""      :: 只装属性页，不接管缩略图/图标
+  apk-shell-ext-setup-1.0.0.exe /VERYSILENT /OVERWRITE=all :: 已有别的工具时也强行接管
   ```
+
+  静默模式不会弹窗：遇到冲突**默认保持原样**，要接管必须显式 `OVERWRITE`（`thumb` / `icon` / `all`）。
 
 装完不需要重启系统。若资源管理器还显示旧图标：**重启资源管理器**（任务管理器 → 资源管理器 → 重新启动），
 或清一次缩略图缓存（见 §4）。
+
+## 1b. 升级
+
+**直接运行新版安装包，不要先卸载。** 安装器会就地覆盖文件，并把记录追加到同一份卸载日志
+（应用列表里始终只有一条 `apk-shell-ext`），卸载时按版本逆序回滚。
+
+- 你选的界面语言（`--lang`）会保留，不会被升级重置。
+- 上次安装时对缩略图/图标两项功能的勾选会沿用（想改就在本次安装页面里改，或用 `--features`）。
+- 升级后会提示关闭并重启资源管理器（文件被占用时）。已生成的缩略图缓存会因解析器版本变化自动失效。
+- 升级时如果刚显示过缩略图，`dllhost.exe`（COM Surrogate）会占着旧的 `apkthumb.dll`：
+  安装器会**强制重启这个宿主进程**来完成替换（那里没有用户数据，不会丢东西）。
+  默认 `CloseApplications=yes` 时这一步会失败（"某些应用程序无法关闭"），所以用的是 `force`。
 
 ## 2. 卸载（精确回滚）
 
@@ -40,7 +61,33 @@ apk-shell-ext-setup-1.0.0.exe
 
 卸载会删除：安装目录、两个 COM 类、五个扩展名的缩略图/属性页/`DefaultIcon` 注册值、
 应用列表条目、以及自建缩略图缓存（`%LOCALAPPDATA%\apk-shell-ext\thumbs`）。
+安装时选了"保持原样"而没有写入的那些注册值，卸载时也不会被碰（它们本来就不属于本程序）。
+卸载前会先跑一次 `apkinfo --features all=off`，把"装完之后又手动打开过"的功能也一并收干净。
 **不会**碰 `.apk` 的文件关联（"用什么打开"），那是别的软件的事。
+
+## 2b. 功能开关（装好之后随时可改）
+
+三层能力里，属性页是核心，另外两层可以单独关掉（比如这台机器上已经有别的工具在做同一件事）：
+
+```bat
+:: 看当前状态
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --features
+
+:: 只关缩略图（大图标视图回落到系统默认图标，属性页照常）
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --features thumb=off
+
+:: 只关文件图标替换（小图标/列表视图回到通用图标）
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --features icon=off
+
+:: 两个都关（等于只留属性页）/ 两个都开
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --features all=off
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --features all=on
+```
+
+- 只改注册表，不删文件；开回来是瞬间的事，不用重装。
+- 关的时候只删"本程序写的那条"，别人的注册值原样不动（会打印出来说明是谁占着）。
+- 属性页不能关（`prop=off` 会被拒绝并返回 4）：不想要它请直接卸载。
+- 图标缓存要等资源管理器重置一次（多数情况自己就刷了，没刷就重启资源管理器）。
 
 ## 3. 免安装（便携 / 开发调试）
 
@@ -80,13 +127,23 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 3. 重启资源管理器；还不行就 `--clear-cache` 再重启。
 
 **小图标分不清 APK / 分包 / HAP？**
-三枚图标分别是绿（APK）、靛（XAPK/APKS/APKM，两叠卡片）、红（HAP，六边形）。
+三枚图标是同一套样式（一张带折角的纸 + 一条写着字的绿/红色带）：
+`.apk` 绿单页（写 APK）、`.xapk/.apks/.apkm` 绿双页（写 XAPK）、`.hap` 红单页（写 HAP）。
+16 px 下只有"绿单页 / 绿双页 / 红单页"这三个特征，字母要 48 px 以上才出现。
 `DefaultIcon` 指向 `{app}\icons\*.ico`，`apkinfo --status` 能看到实际路径。
 
 **属性页没有"安装包信息"这一页？**
 - 属性页只对 `.apk/.xapk/.apks/.apkm/.hap` 出现；
 - 若刚换过 DLL，资源管理器里还缓存着旧的——重启资源管理器；
 - 打开 `--diag on`，再开一次属性页，看 `apkthumb.log` 里有没有 worker 的记录。
+
+**我已经装了别的 APK 图标/缩略图工具，会不会冲突？**
+不会硬抢：安装时如果探测到 `.apk` 等扩展名上已经有别人的缩略图 handler 或 `DefaultIcon`，
+安装器会分别问一次，默认按钮是"否（保持原样）"，选"否"就一个值都不写；
+装好之后也可以用 `--features` 单独关掉本程序的那一项（见 §2b）。
+
+**升级要不要先卸载？**
+不要。直接运行新版安装包即可（见 §1b），应用列表里始终只有一条记录。
 
 **杀软/智能应用控制拦安装器？**
 安装器没有签名（v1 不带证书），SmartScreen 会提示"未知发布者"，选"仍要运行"即可。

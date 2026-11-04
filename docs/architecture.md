@@ -168,19 +168,25 @@ apkinfo.exe --lang zh|en|auto                属性页语言（写 HKCU\Software
 **`features`** 只收清单里显式声明的 `uses-feature`（`required` 缺省 true）。
 aapt2 会额外打印"隐含特性"（默认 faketouch、屏幕方向、由权限推出的 wifi），那是它自己推的，我们**不**合成。
 
-## 2.4 静态类型图标（M5 已落地，见 [m5-delivery.md §2](m5-delivery.md)）
+## 2.4 静态类型图标（M5 落地；2026-11-04 改版为 v2，记录 [verification.md R-0015](verification.md)）
 
-小图标 / 列表 / 详细信息视图不调用任何代码，用**每个扩展名自己的** `DefaultIcon` 区分格式：
+小图标 / 列表 / 详细信息视图不调用任何代码，用**每个扩展名自己的** `DefaultIcon` 区分格式。
+三枚图标共用一套形状语言（几何常量即事实来源：`tools\gen_icons.py` 顶部，量自用户给的参考图，该图不入库）：
+**一页纸 + 右上折角 + 横跨纸边的色带 + 白字**。
 
-| 扩展名 | 资源 | 说明 |
-| --- | --- | --- |
-| `.apk` | `icons\apk.ico` | 安卓机器人轮廓 + "APK" |
-| `.apks` `.xapk` `.apkm` | `icons\apks.ico` | 同族，标注分包 |
-| `.hap` | `icons\hap.ico` | "HAP" |
+| 扩展名 | 资源 | 形状 | 配色 |
+| --- | --- | --- | --- |
+| `.apk` | `icons\apk.ico` | 单页 + 折角，色带写 "APK" | 安卓绿（纸 `#AACC34` / 带 `#5FB74B`） |
+| `.apks` `.xapk` `.apkm` | `icons\apks.ico` | 两页错开（"一包多 APK"），色带写 "XAPK" | **同 `.apk`**（同一家族色） |
+| `.hap` | `icons\hap.ico` | 单页 + 折角，色带写 "HAP" | 红（纸 `#FA8578` / 带 `#C62A45`） |
 
 - 每个 ico 内含 16/24/32/48/256 五档（**每档独立绘制**，不是 256 缩小；48 起才画 "APK"/"XAPK"/"HAP" 字样），
   `DefaultIcon` 只写文件路径（按用户安装是 `"%LOCALAPPDATA%\Programs\apk-shell-ext\icons\apk.ico",0`）。
   图标由 `tools\gen_icons.py` 生成并入库：运行时由 Explorer 直接读文件，构建不依赖 Python。
+- 字形用 **Nunito Black**（SIL OFL，随仓库放在 `tools\fonts\Nunito-Variable.ttf`，`--font` 可覆盖）：
+  同一份脚本在任何机器上出同一张图，不再看系统字体脸色；字体缺失时退到系统 Segoe UI Black 并告警。
+- 小尺寸取舍：16/24/32 px 下 `.apk` 与 `.apks` 只差"单页 / 两页"的 2 px 台阶（颜色按需求统一成绿色），
+  文字 48 px 才出现——像素数的物理限制，对照见 `docs/evidence/icon-v2-sizes.png`。
 - **不实现 `IExtractIcon`**（ADR-0001）；`DefaultIcon` 是 Explorer 自己读资源，零调用成本。
 - 卸载时随注册表一起还原（先记录原值，若原来无值则删除该键）。
 
@@ -227,9 +233,17 @@ HKCR\.apk\DefaultIcon
 - 卸载由 `unins000.exe` 按声明撤销（`uninsdeletevalue` / `uninsdeletekeyifempty`），外加
   `[UninstallDelete]` 清 `%LOCALAPPDATA%\apk-shell-ext\thumbs` 与日志；
   验收用 `tools\verify-install.ps1`（装后断言 + 卸后残留检查 + 快照 diff）。
+- **功能开关（ADR-0008）**：缩略图（5 个 `ShellEx` 值）与静态图标（5 个 `DefaultIcon` 值）各有一个开关，
+  由 `[Tasks]` 的 `thumb` / `icon` + `Check: AllowThumb/AllowIcon` 在安装时决定写不写；属性页恒装。
+  装好之后用 `apkinfo --features [thumb=on|off][,icon=on|off][,all=on|off]` 改（改完 `SHChangeNotify`）。
+  `--features` 只删"指向我们自己"的值（缩略图比 CLSID；图标认 `\icons\<file>` 且文件存在），删完连空壳键一起清。
+  安装前探测到别人的 handler（CLSID 有活的 `InprocServer32` / `DefaultIcon` 指向真实文件）时，
+  交互模式按功能询问、默认"保持原样"；静默模式默认同样保持原样，`/OVERWRITE=thumb|icon|all` 才接管。
+- `[UninstallRun]` 在删文件前跑一次 `apkinfo --features all=off`：收拾"装的时候关了、后来用命令打开"的值
+  （它们不在卸载日志里，声明式回滚看不见）。
 - 界面语言开关：`HKCU\Software\apk-shell-ext\UiLanguage` = `zh` / `en` /
   缺省（跟随系统），由 `apkinfo --lang` 写。属性页跑在 `explorer.exe` 里，收不到环境变量，
-  只能走注册表。
+  只能走注册表。安装器里这条值为 `createvalueifdoesntexist`：升级不会把用户选择顶回 `auto`。
 - 不碰 `.apk` 的默认 ProgID / 文件关联（那是"打开方式"的事，与本文无关）。
 - 提供 `tools\register.ps1 -Install|-Uninstall -Extensions apk,apks,...` 作为手工入口（免装安装器也能测）。
 

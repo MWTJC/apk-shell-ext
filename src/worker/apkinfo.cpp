@@ -410,7 +410,8 @@ void PrintUsage() {
                 L"usage: apkinfo --json [--schema=1] [--hash=sha256] [--pretty]\n"
                 L"               [--timeout=<seconds>] <file>\n"
                 L"       apkinfo --clear-cache [--cache-info]\n"
-                L"       apkinfo --status | --diag on|off|status|clear\n");
+                L"       apkinfo --status | --diag on|off|status|clear\n"
+                L"       apkinfo --features [thumb=on|off][,icon=on|off][,all=on|off]\n");
 }
 
 // 缓存清理（M5）：缩略图缓存是自建的，卸载后也要能一键清空，所以放在会随安装一起装上的 worker 里。
@@ -480,6 +481,15 @@ int wmain(int argc, wchar_t** argv) {
     } else if (arg == L"--status") {
       ::CoUninitialize();
       return apksx::RunStatusCommand();
+    } else if (arg.rfind(L"--features=", 0) == 0) {
+      ::CoUninitialize();
+      return apksx::RunFeaturesCommand(arg.substr(11));
+    } else if (arg == L"--features") {
+      // 不带值 = 查询；带值但以 '-' 开头说明是别的开关，也按查询处理
+      std::wstring action;
+      if (i + 1 < argc && argv[i + 1][0] != L'-') action = argv[++i];
+      ::CoUninitialize();
+      return apksx::RunFeaturesCommand(action);
     } else if (arg.rfind(L"--diag=", 0) == 0) {
       ::CoUninitialize();
       return apksx::RunDiagCommand(arg.substr(7));

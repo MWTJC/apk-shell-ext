@@ -13,7 +13,7 @@
 | [verification.md](verification.md) | 把"无感"变成可复现的数字：ProcMon 配方、耗时/内存判据、R-0001~R-0014 记录表 | 每阶段收尾 |
 | [m5-delivery.md](m5-delivery.md) | M5 交付：Inno 安装器、格式图标、VERSIONINFO、i18n、装好之后的命令；含未做清单 | 用/改交付形态前 |
 | [install.md](install.md) | 用户手册：装/卸/静默/便携/清缓存/开诊断/FAQ（会随安装包落到安装目录） | 装或卸之前 |
-| [adr/](adr/README.md) | 架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主、格式范围、分发与安装形态） | 想推翻某个约束前 |
+| [adr/](adr/README.md) | 架构决策（缩略图接口、禁止项、worker、技术栈、隔离宿主、格式范围、分发与安装形态、功能开关与升级策略） | 想推翻某个约束前 |
 
 ## 写作约定
 

@@ -26,7 +26,11 @@ param(
     [string]$Path = '',
     [string]$A = '',
     [string]$B = '',
-    [ValidateSet('installed', 'removed')][string]$State = 'installed'
+    [ValidateSet('installed', 'removed')][string]$State = 'installed',
+    # Which features this installation is supposed to have switched on (ADR-0008).
+    # Default = the normal, everything-on install. Pass e.g. -Features prop to assert a install
+    # where thumbnails and file icons were deliberately left out.
+    [ValidateSet('thumb', 'icon', 'prop')][string[]]$Features = @('thumb', 'icon', 'prop')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -139,17 +143,27 @@ switch ($Phase) {
             }
             foreach ($ext in $Exts) {
                 $key = Join-Path $Classes ('.' + $ext + '\ShellEx\' + $ThumbHandlerId)
-                if ((Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).'(default)' -ne $ThumbClsid) {
-                    $problems += ".$ext thumbnail handler missing"
+                $value = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).'(default)'
+                if ($Features -contains 'thumb') {
+                    if ($value -ne $ThumbClsid) { $problems += ".$ext thumbnail handler missing" }
+                } elseif ($value -eq $ThumbClsid) {
+                    $problems += ".$ext thumbnail handler registered although thumb was not requested"
                 }
                 $propKey = Join-Path $Classes ('.' + $ext + '\shellex\PropertySheetHandlers\ApkInfo')
-                if ((Get-ItemProperty -LiteralPath $propKey -ErrorAction SilentlyContinue).'(default)' -ne $PropClsid) {
-                    $problems += ".$ext property page handler missing"
+                $value = (Get-ItemProperty -LiteralPath $propKey -ErrorAction SilentlyContinue).'(default)'
+                if ($Features -contains 'prop') {
+                    if ($value -ne $PropClsid) { $problems += ".$ext property page handler missing" }
+                } elseif ($value -eq $PropClsid) {
+                    $problems += ".$ext property page handler registered although prop was not requested"
                 }
                 $iconKey = Join-Path $Classes ('.' + $ext + '\DefaultIcon')
                 $icon = (Get-ItemProperty -LiteralPath $iconKey -ErrorAction SilentlyContinue).'(default)'
                 $want = '"' + (Join-Path (Join-Path $InstallDir 'icons') $IconFor[$ext]) + '",0'
-                if ($icon -ne $want) { $problems += ".$ext DefaultIcon = '$icon' (want '$want')" }
+                if ($Features -contains 'icon') {
+                    if ($icon -ne $want) { $problems += ".$ext DefaultIcon = '$icon' (want '$want')" }
+                } elseif ($icon -eq $want) {
+                    $problems += ".$ext DefaultIcon still points at us although icon was not requested"
+                }
             }
             $server = (Get-ItemProperty -LiteralPath $thumb -ErrorAction SilentlyContinue).'(default)'
             if ($server -ne (Join-Path $InstallDir 'apkthumb.dll')) { $problems += "thumb InprocServer32 = '$server'" }

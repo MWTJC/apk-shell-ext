@@ -176,8 +176,9 @@ B2 不能靠感觉，写成工具判据（[verification.md](verification.md)）�
 
 ## 8. 未决问题（M5 已决的标注结论）
 
-- ~~差异化 ico 的具体视觉~~ —— 已决（M5）：**按格式分色 + 形状**（APK 绿机器人 / 分包靛紫双卡 / HAP 红六边形），
-  不带版本角标；16/24/32/48/256 各档独立绘制。见 [m5-delivery.md](m5-delivery.md) §2。
+- ~~差异化 ico 的具体视觉~~ —— 已决（M5；2026-11-04 改版 v2）：**一套"纸页 + 色带"语言，颜色分族**——
+  `.apk` 与多 APK 容器同用安卓绿（单页 / 两页区分），`.hap` 红色；不带版本角标；16/24/32/48/256 各档独立绘制。
+  见 [m5-delivery.md](m5-delivery.md) §2 与 [verification.md R-0015](verification.md)。
 - 缩略图是否叠加"类型角标"（APK/IPA/HAP 小标记），还是保持纯净。
 - ~~MSIX/APPX 是否纳入~~ —— 已决：**不做**（[ADR-0006](adr/0006-format-scope-cut.md)，2026-11-04）。
 - 是否购买代码签名证书（EV/OV）：影响 SmartScreen 与杀软误报率；APK-Info 至今仍有误报 `[上游]`。

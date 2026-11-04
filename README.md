@@ -4,7 +4,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M0–M5 全部完成**（M1 R-0002 · M2 R-0005 · M3 R-0006/0009/0010/0011 · M4 R-0011/R-0012/R-0013 · **M5 R-0014**；格式范围见 ADR-0006，分发见 ADR-0007） |
+| 阶段 | **M0–M5 全部完成**（M1 R-0002 · M2 R-0005 · M3 R-0006/0009/0010/0011 · M4 R-0011/R-0012/R-0013 · **M5 R-0014** · **M5 之后：图标 v2 R-0015、功能开关 R-0016**；格式范围见 ADR-0006，分发见 ADR-0007/0008） |
 | 平台 | Windows 10 1809+ / Windows 11 x64（x86 宿主仍未评估） |
 | 产物 | `apkthumb.dll`（缩略图）· `apkinfo.exe`（解析 worker + 状态/诊断/缓存/语言命令）· `apkprop.dll`（属性页）· **`apk-shell-ext-setup-1.0.0.exe`（单文件安装器，2.1 MB）** |
 | 许可 | MIT（`LICENSE`；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
@@ -35,7 +35,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 apk-shell-ext/
 ├─ docs/            设计、架构、格式矩阵、路线图、验收、ADR、安装说明
 ├─ installer/       Inno Setup 6 脚本（apk-shell-ext.iss）— M5
-├─ icons/           三枚格式 ico（16/24/32/48/256，由 tools/gen_icons.py 生成）— M5
+├─ icons/           三枚格式 ico（16/24/32/48/256，由 tools/gen_icons.py 生成）— M5/v2
 ├─ src/
 │  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、签名块、图标定位、
 │  │                容器侦查、WIC、缓存、i18n）— ✅ M1/M2/M4a/M5
@@ -45,7 +45,8 @@ apk-shell-ext/
 │  ├─ version.h     版本号唯一来源（VERSIONINFO / 安装器都取它）— M5
 │  └─ third_party/  miniz（raw deflate，MIT，只编 C 源）
 ├─ tools/           build.cmd、pack.cmd（出安装包）、register.ps1、verify-install.ps1、
-│                   gen_icons.py、验收/截图脚本
+│                   gen_icons.py（+ fonts/ 里的 Nunito Black）、icon_probe.ps1（查 Explorer 实际画的图标）、
+│                   验收/截图脚本
 └─ tests/           gen_fixtures.py（aapt2 造真实包）、verify_*.py（交叉校验）、验收工具
 ```
 
@@ -56,7 +57,7 @@ apk-shell-ext/
 tools\build.cmd Release                :: 产物在 out\x64\{apkthumb.dll, apkprop.dll, apkinfo.exe, ...}
 
 :: 2) 图标（一次性；已入库，除非改了生成脚本）
-uv run --with pillow python tools\gen_icons.py
+uv run --with pillow python tools\gen_icons.py --preview
 
 :: 3) 出安装包（需要 Inno Setup 6；ISCC 路径可用环境变量 ISCC 覆盖）
 tools\pack.cmd                         :: 产物 out\dist\apk-shell-ext-setup-1.0.0.exe
@@ -104,7 +105,11 @@ powershell -File tools\verify-install.ps1 -Phase diff -A a.txt -B b.txt
 "%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --diag on|off|status|clear
 "%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --clear-cache | --cache-info
 "%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --lang zh|en|auto
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --features [thumb=on|off][,icon=on|off][,all=on|off]
 ```
+
+缩略图与静态图标各有一个开关（[ADR-0008](docs/adr/0008-feature-toggles-and-upgrade-policy.md)）：属性页是核心，恒开；
+另外两层可以在安装页面里不勾，也可以装好之后随时用 `--features` 关/开。
 
 日志：存在 `%TEMP%\apk-shell-ext.debug.on` 时写 `%LOCALAPPDATA%\apk-shell-ext\apkthumb.log`。
 
@@ -120,7 +125,7 @@ powershell -File tools\verify-install.ps1 -Phase diff -A a.txt -B b.txt
 | [docs/m3-property-page.md](docs/m3-property-page.md) | M3 属性页设计与实施记录（`IShellExtInit` 硬要求、图标退路、实测数字） |
 | [docs/m5-delivery.md](docs/m5-delivery.md) | **M5 交付**：安装器 / 图标 / VERSIONINFO / i18n / 命令、实测数字、未做清单 |
 | [docs/install.md](docs/install.md) | 用户手册（装/卸/静默/便携/FAQ）——**会随安装包落地到安装目录** |
-| [docs/adr/](docs/adr/README.md) | 架构决策记录（7 条；0007 = 用 Inno Setup + 按用户安装） |
+| [docs/adr/](docs/adr/README.md) | 架构决策记录（8 条；0007 = 用 Inno Setup + 按用户安装，0008 = 功能开关与升级策略） |
 
 ## 当前状态
 
@@ -151,14 +156,27 @@ powershell -File tools\verify-install.ps1 -Phase diff -A a.txt -B b.txt
   （`%LOCALAPPDATA%\Programs\apk-shell-ext` + `HKCU\Software\Classes`），勾"为所有用户安装"或 `/ALLUSERS`
   才要一次 UAC。实测 `/VERYSILENT` 装 → `verify-install.ps1` 全绿 → `unins000.exe` 卸 → 残留检查 ok、
   装前/卸后快照 **diff 为 0**。自研的 `apkinst.exe`（约 1100 行）已删除，教训写进 m5-delivery.md §1。
-- **三枚格式图标**（`icons\{apk,apks,hap}.ico`，16/24/32/48/256 各档独立绘制）+ `DefaultIcon` 注册：
-  列表视图 16 px 下绿机器人 / 靛紫双卡 / 红六边形三族可分辨（`docs/evidence/m5-defaulticons-list-zoom.png`）。
+- **三枚格式图标**（`icons\{apk,apks,hap}.ico`，16/24/32/48/256 各档独立绘制）+ `DefaultIcon` 注册。
+  **2026-11-04 改版为 v2**（[R-0015](docs/verification.md)）：纸页 + 折角 + 色带 + 白字（几何常量在 `tools\gen_icons.py`），
+  `.apk` 与 `.apks/.xapk/.apkm` 统一安卓绿（单页 / 两页区分），`.hap` 保持红色家族；
+  字形用入库的 Nunito Black（`tools\fonts\`）。对照图 `docs/evidence/icon-v2-sizes.png`，
+  16 px 实拍 `icon-v2-defaulticons-details.png`。
 - **VERSIONINFO 1.0.0.0**（四个二进制，en-US + zh-CN 双块）；`APKSX_PARSER_VERSION` 升到 `m5`，旧缩略图缓存自动失效。
 - **装好之后的命令都并入 `apkinfo.exe`**：`--status / --diag / --clear-cache / --cache-info / --lang`。
 - **中英双语**：`src/core/i18n.{h,cpp}`（界面 77 条 + 解析器错误字典约 60 条），语言顺序
   `UiLanguage`(HKCU) → `APKSX_LANG` → 系统语言；属性页中英各截一张
   （`m5-propsheet-zh.png` / `m5-propsheet-en.png`），model 单测 60 → 71 ok。
 - **`IExtractIcon` 结论：不做**（ADR-0001 不修订）。
+
+**2026-11-04 之后（M5 收口后的两轮改动，记录 [R-0015](docs/verification.md) / [R-0016](docs/verification.md)）**
+
+- **图标 v2**：三枚 `DefaultIcon` 改成"纸页 + 折角 + 色带 + 白字"（几何常量在 `tools/gen_icons.py`），
+  `.apk` 与 `.apks/.xapk/.apkm` 同用安卓绿（单页/两页区分），`.hap` 红；字形 vendored Nunito Black。
+  对照 `docs/evidence/icon-v2-sizes.png`，16 px 实拍 `icon-v2-defaulticons-details.png`。
+- **功能开关**（[ADR-0008](docs/adr/0008-feature-toggles-and-upgrade-policy.md)）：缩略图与静态图标各有开关
+  （安装期 `[Tasks]` + 运行期 `apkinfo --features`），属性页恒开；安装期探测到别人的 handler 会**按功能分别询问**，
+  默认"保持原样"（不写也不撤），静默安装用 `/OVERWRITE=` 显式接管。
+- **升级**：就地追加卸载日志（不先卸载），`UiLanguage` 不再被升级重置；按用户要求**不加**降级拦截。
 
 ## 下一步（v1 之后的待办，按价值排序）
 
@@ -188,6 +206,18 @@ powershell -File tools\verify-install.ps1 -Phase diff -A a.txt -B b.txt
   `UiLanguage` 恢复 `auto`（= 中文），图标缓存清过。要回到"干净机器"就 `unins000.exe`。
 - **改图标/换 DLL 后**：删 `%LOCALAPPDATA%\IconCache.db` 与
   `%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db` 并重启资源管理器，否则看的是旧图（踩过）。
+- **图标是 v2（2026-11-04，[R-0015](docs/verification.md)）**：纸页 + 折角 + 色带 + 白字（参考图未入库），
+  几何常量在 `tools\gen_icons.py` 顶部；改样式只动常量与 `FAMILIES`，再跑
+  `uv run --with pillow python tools\gen_icons.py --preview`。字形是入库的 Nunito Black（OFL），
+  换掉 `tools\fonts\Nunito-Variable.ttf` 才会变；缺字体时退 Segoe UI Black 会告警。
+  验"Explorer 实际画哪一档"用 `tools\icon_probe.ps1`（手工工具，不进构建）。
+  **待定**：16 px 下 `.apk` 与 `.apks` 只差 2 px 台阶，是否给容器加独立标记（角标/双色带）。
+- **功能开关（2026-11-04，[R-0016](docs/verification.md) / [ADR-0008](docs/adr/0008-feature-toggles-and-upgrade-policy.md)）**：
+  `thumb` / `icon` 两个开关，安装期是 `[Tasks]` + `Check: AllowThumb/AllowIcon`（跳过的条目卸载时也不碰，
+  实测过），运行期是 `apkinfo --features ...`（直改注册表 + `SHChangeNotify`）；属性页恒开。
+  `[UninstallRun]` 会在删文件前跑 `--features all=off`，收拾"装的时候关了、后来手动打开"的值。
+  **改这块要先看**：`.iss` 的 `AskAboutConflicts`（`ssInstall` 里探测别人的 handler，默认"保持原样"）、
+  `support.cpp` 的 `RunFeaturesCommand`（只删"指向我们自己"的值）、`verify-install.ps1 -Features`。
 - **改文案**：界面文案只改 `src/core/i18n.cpp` 的表；解析器错误保留 core 里的中文原文，
   由 `TrMsg` 字典在 worker 出口翻译。`propsheet_model_test --selftest` 会钉住中文断言。
 
