@@ -303,8 +303,10 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 ### 已知限制 / 未验证
 
 1. ~~无障碍：自绘列表对 Narrator 不友好~~ —— 已随原生控件消除（§16）。
-2. **150% / 200% DPI 未实测**（当前机器 100%）；页内跟窗口的一致性已截图为证（系统深色时页内仍是浅色）。
-3. 100 次开关的句柄趋势未做（10 次已做，见 R-0006）；`worker 崩溃` 用标志文件钩子验证通过
+2. ~~**150% / 200% DPI 未实测**~~ —— 布局数学已抽成纯函数并对 6 档 DPI 断言（§16.4、[R-0011](verification.md)）；
+   仅剩"真实缩放下的肉眼确认"未做。
+3. ~~100 次开关的句柄趋势未做~~ —— 已做：9376 → 9177（Δ−199）、残留 worker 0（[R-0011](verification.md)）。
+   `worker 崩溃` 用标志文件钩子验证通过
    （`%TEMP%\pk-shell-ext.test-abort.on` → `ExitProcess(0xC0000005)`）。
 4. 中英文双语只做了中文文案；`.rc` 的 STRINGTABLE 留了 ID，英文在 M5 一起做。
 
@@ -393,5 +395,18 @@ v5 时把**组标题降级成普通行**插在明细前面（`应用`、`技术`
 2. `权限`、`特性` 两个分组带的箭头可**鼠标单击折叠/展开**；
 3. 默认态为**收起**，整页不需要滚动就能看全五六组。
 
-至此 M3 的主要验收项全部通过；剩下未测的只有 150%/200% DPI 下的排版与深色主题截图（见
-[verification.md R-0009/R-0010](verification.md) 的"未验证"）。
+至此 M3 的主要验收项全部通过。
+
+### 16.4 布局抽成纯函数 + DPI 自动验收（2026-11-04，[R-0011](verification.md)）
+
+`Relayout` 里那套"图标/三行文字/分隔线/底栏按钮/列表"的几何算术搬进了
+`src/propsheet/page_layout.{h,cpp}` 的 `ComputePageLayout(dpi, width, height, show_hash, show_retry)`
+（纯函数，不碰窗口），`Relayout` 只剩"把矩形交给 `MoveWindow`"。
+
+于是 150%/200% 不必等一台高 DPI 机器：`propsheet_model_test --selftest` 对
+**6 档 DPI（96–240）× 客户区 360–900 × 400–1000 DIP × 4 种按钮组合 = 20,832 个组合**
+断言"控件都在客户区内 / 无负宽高 / 底栏不重叠 / 头部文字不压图标 / 列表不与头尾重叠"，
+外加 96 DPI 的黄金值与 150%/200% 的等比关系（图标 48/64 px、内边距 18/24 px）。
+
+仍未做的是**真实缩放下的肉眼确认**（字体渲染、真实对话框尺寸），已在
+[verification.md R-0011](verification.md) 的"未验证"里单列。

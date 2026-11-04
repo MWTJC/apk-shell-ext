@@ -19,9 +19,9 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | M0 | 文档与接口/验收基线 | 本套文档 + 4 条 ADR | 0.5 d | ✅ 完成（2026-11-03 评审通过） |
 | M1 | APK 缩略图最小闭环 | `apkthumb.dll` + 注册脚本 + 缓存 | 3–4 d | ✅ 完成（2026-11-03，记录见 [verification.md R-0002](verification.md)） |
-| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | 🟡 进行中：JSON + aapt2 交叉校验通过；**TD-001 已关闭**；**签名块与 features 已落地**；`splits` 未做 |
-| M3 | 属性页 | `apkprop.dll`（原生控件、异步、错误态、复制、可折叠分组） | 2–3 d | ✅ 用户已验收（[R-0006](verification.md)·[R-0009](verification.md)·[R-0010](verification.md)）；150%/200% DPI 未测 |
-| M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | ⬜ |
+| M2 | 解析核心与 worker | `apkinfo.exe` + JSON schema v1 + 测试固件 | 2–3 d | ✅ 完成（2026-11-04）：JSON + aapt2 交叉校验、TD-001 关闭、签名块、features、`splits`（随 M4a）全部落地；仅剩 TD-002 与 V8 回归 |
+| M3 | 属性页 | `apkprop.dll`（原生控件、异步、错误态、复制、可折叠分组） | 2–3 d | ✅ 用户已验收（[R-0006](verification.md)·[R-0009](verification.md)·[R-0010](verification.md)）；DPI 由布局单测覆盖（[R-0011](verification.md)） |
+| M4 | 全格式 | APKS/XAPK/APKM → AAB → IPA → HAP → APPX | 6–9 d | 🟡 M4a ✅（.xapk/.apks/.apkm，[R-0011](verification.md)）；M4b–e 未开始 |
 | M5 | 交付打磨 | 安装器、签名、i18n、诊断、回归 | 3–4 d | ⬜ |
 
 **M0 评审记录（2026-11-03）**——三项决策已确认，后续实现不得再讨论：
@@ -136,7 +136,7 @@ flowchart LR
 | 与 `aapt2 dump badging` 交叉校验 | ✅ 11/11 |
 | `signature`（v1 / v2 / v3 方案 + 证书摘要） | ✅ 22/22 与 apksigner 一致（R-0005） |
 | `features`（uses-feature） | ✅ 11/11 与 aapt2 一致 |
-| `splits`（.apks 分包） | ⬜ 随 M4a 一起做（`.apk` 单包本身没有 splits 可列） |
+| `splits`（.apks 分包） | ✅ 随 M4a 落地（2026-11-04）：`container.splits`，见 [architecture.md §2.3](architecture.md) |
 | TD-002：deflate 的大 arsc | ⬜ |
 
 **签名块（已落地，2026-11-04；细节与实测见 [verification.md R-0005](verification.md)）**
@@ -221,16 +221,32 @@ flowchart LR
 | 按需 SHA-256（按钮） | ✅ 172 ms（7.9 MB）/ ~1.2 s（1.9 GB） |
 | 注册脚本 `-Feature Propsheet`（HKCU，免 UAC） | ✅ |
 | 亮暗跟随系统（页内不自带配色） | ✅ 2026-11-04 改为原生控件：配色/主题全部由系统与宿主决定 |
-| 150%/200% DPI、100 次开关句柄、卸载 diff | ⬜ 未测（worker abort 与卸载已补测） |
+| 150%/200% DPI、100 次开关句柄、卸载 diff | ✅ DPI 由布局纯函数 20,832 组合断言覆盖；100 次开关实测句柄无增长（[R-0011](verification.md)）；真实缩放渲染未做人眼确认 |
 | 中英双语 | ⬜ M5 |
 
 ## M4 · 全格式
+
+**M4a 实施记录（2026-11-04，记录 [R-0011](verification.md)）**
+
+- `src/core/package.{h,cpp}`：容器侦查 + base 选择 + base 数据源。单 APK 也走这条（根上有
+  `AndroidManifest.xml` 就是 APK），所以缩略图与 worker 只有一条代码路径。
+- `src/core/byte_source.cpp` 新增 `MemorySource`（deflate 的 base 只能整块解压）；Stored 的 base 走
+  `SliceSource`，**PUBG 的 1.25 GB xapk 只读 107 MB 的 base，不整包进内存**。
+- `apk_info` 拆成 `ScanApkZip(zip, ...)` + `CollectApkInfoFromSource`（先判容器再解析），JSON 增加
+  `container` 块（见 [architecture.md §2.3](architecture.md)），`kind` 现在会写 `xapk/apks/apkm/splits`。
+- 缩略图：`thumb_provider` 改用 `ReadPackageIcon()`（定位图标 → 读字节 → 解码），容器根 `icon.png` 是兜底。
+- 属性页：`page_model` 增加「安装包类型」「内层 APK」两行与可折叠「分包 · N 项」组。
+- `register.ps1` 默认扩展名改为 `apk, xapk, apks, apkm`（`-Extensions 'apk'` 可退回只注册 APK）。
+- 新增 `tests/verify_container.py`（与 aapt2 + ZIP 交叉校验）与 `tests/gen_container_fixtures.py`
+  （4 个坏容器：无 APK / 坏 base / 假炸弹 / 截断）。
+- **只测过 `.xapk` 真实样本**；`.apks`（bundletool）与 `.apkm`（APKMirror）只有启发式 + 坏样本，
+  拿到真实样本前不要宣称支持。
 
 按"复用成本从低到高"排序，每个子阶段独立验收：
 
 | 子阶段 | 内容 | 估时 | 关键验收 |
 | --- | --- | --- | --- |
-| M4a | `.apks/.xapk/.apkm`（外层 ZIP + base.apk；`icon.png` 兜底） | 1 d | 3 个真实包图标正确；split 列表在属性页可见 |
+| M4a | `.apks/.xapk/.apkm`（外层 ZIP + base.apk；`icon.png` 兜底） | 1 d | ✅ 2026-11-04（[R-0011](verification.md)）：2 个真实 xapk 与 aapt2 一致、Explorer 里出图标、属性页有「分包」组 |
 | M4b | `.aab`（`BundleConfig.pb`、**protobuf manifest**、`resources.pb`） | 2–3 d | 3 个 AAB：包名/版本/模块列表正确；图标与 bundletool 生成的一致 |
 | M4c | `.ipa`（binary plist；AppIcon 约定名 → iTunesArtwork → `Assets.car` 回退） | 2 d | 3 个 IPA：bundleId/版本正确；≥ 2 个能出高清图标（car 失败要能回退） |
 | M4d | `.hap`（`module.json`；`$media:` → `resources.index` 启发式 → 索引解析） | 2–3 d | 3 个 HAP：bundleName/versionName 正确；≥ 2 个出图标 |

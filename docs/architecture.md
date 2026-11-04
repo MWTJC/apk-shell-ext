@@ -70,7 +70,7 @@ flowchart LR
 | 项 | 约定 |
 | --- | --- |
 | 实现接口 | `IShellPropSheetExt` + `IPersistFile` + **`IShellExtInit`**（M3 实测：这个 build 在建页前先 QI 它，缺了就直接跳过 handler） |
-| 注册 | `HKCR\.apk\shellex\PropertySheetHandlers\ApkInfo` 等，按扩展名逐个注册 |
+| 注册 | `HKCR\.apk\shellex\PropertySheetHandlers\ApkInfo` 等，按扩展名逐个注册（M4a 起四个扩展名） |
 | `AddPages` | ≤ 50 ms：`CreatePropertySheetPage` 后立刻返回；解析任务在 `PSM_INITDIALOG` 之后 `PostMessage` 启动 |
 | 页面 | 单页「安装包信息」；顶部大图标 + 应用名；字段分 4 组（应用 / 技术 / 权限与组件 / 文件与签名） |
 | 异步 | 工作线程读管道；`WM_APP+1` 回填；页面销毁时置取消标志，线程 detached 且不触碰已销毁 HWND |
@@ -106,30 +106,37 @@ apkinfo.exe --json --schema=1 [--hash=sha256] [--icon=<out.png>] <file>
 | 并发 | 每次调用独立进程；不共享状态；缓存只写文件（原子 rename） |
 | 安全 | 只读打开源文件（`FILE_SHARE_READ|WRITE|DELETE`）；不解压到临时目录；限额见 [formats.md](formats.md) §4 |
 
-**JSON schema v1（M2 实施中：已实现 `file` / `app` / `icon` / `signature` / `features` / `components` /
-`permissions` / `diagnostics`；`splits` 待 M4a 补齐，字段只增不改）**
+**JSON schema v1（已实现 `file` / `app` / `container` / `icon` / `signature` / `features` / `components` /
+`permissions` / `diagnostics`；字段只增不改）**
 
 ```json
 {
   "schema": 1,
-  "kind": "apk",                       // apk | apks | aab | ipa | hap | appx
+  "kind": "apk",                       // apk | xapk | apks | apkm | splits（后四种 = 多 APK 容器）
   "file": {"path": "D:\\x\\a.apk", "size": 12345678, "mtime": 1762000000,
            "sha256": "…"},              // sha256 仅在 --hash 时出现
   "app": {"package": "com.example.app", "label": "示例应用",
           "versionName": "1.2.3", "versionCode": 123, "minSdk": 26, "targetSdk": 34,
           "compileSdk": 34, "abis": ["arm64-v8a"], "densities": ["xxhdpi"],
           "locales": ["zh-CN", "en"], "installLocation": "auto"},
+  "container": {                        // 只在多 APK 容器里出现（M4a）
+    "kind": "xapk", "base": "com.example.app.apk", "apkCount": 2,
+    "splits": [{"name": "com.example.app.apk", "size": 15812534, "kind": "base", "base": true},
+               {"name": "config.armeabi_v7a.apk", "size": 6316540, "kind": "config"}]
+  },
   "icon": {"source": "res/mipmap-xxhdpi-v4/ic_launcher.png", "width": 144, "height": 144,
-           "adaptive": false},
+           "adaptive": false, "fromContainer": false},   // fromContainer 仅在退到根 icon.png 时出现
   "signature": {"scheme": ["v2", "v3"], "certs": [{"subject": "CN=…", "sha256": "…",
                 "notBefore": "2024-01-01T00:00:00Z", "notAfter": "2054-01-01T00:00:00Z"}]},
   "permissions": [{"name": "android.permission.INTERNET", "level": "normal", "declared": true}],
   "components": {"activities": 12, "services": 3, "receivers": 2, "providers": 1},
   "features": [{"name": "android.hardware.camera", "required": true}],
-  "splits": [{"name": "base", "size": 123}, {"name": "config.arm64_v8a", "size": 45}],
   "diagnostics": {"warnings": ["arsc 未找到，图标按文件名启发式选取"], "elapsedMs": 143}
 }
 ```
+
+`container.splits` 里 `kind` 目前只有三档：`base` / `config`（名字以 `config.` 开头）/ `other`。
+所有 `app.*` / `signature` 字段描述的都是**base APK**（v1 不做跨 split 合并），`file.size` 才是外层容器大小。
 
 字段只增不改；破坏性变更升 `schema`。缺字段一律省略而不是 `null`，便于 UI 判断。
 
@@ -177,7 +184,7 @@ aapt2 会额外打印"隐含特性"（默认 faketouch、屏幕方向、由权�
 
 ## 4. 注册表契约
 
-只注册被支持的扩展名（`.apk` 打样，其余同理）：
+只注册被支持的扩展名（`.apk` 打样，其余同理；M4a 起默认扩展到 `.apk/.xapk/.apks/.apkm`）：
 
 ```
 HKCR\.apk\ShellEx\{E357FCCD-A995-4576-B01F-234630154E96}

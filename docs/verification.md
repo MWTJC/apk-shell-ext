@@ -806,3 +806,111 @@ M3 主要验收项到此全部通过。
 `LVM_ENABLEGROUPVIEW` 返回值不可靠（v6 下也可能返回 FALSE）：第一次按返回值判断，
 列表进入"分组模式但条目无组"状态，整屏空白。改用 `comctl32.dll` 的 `DllGetVersion`
 判断主版本号是否 ≥ 6，并且 v5 时显式 `ListView_EnableGroupView(FALSE)`。
+
+## 19. R-0011 记录（M3 补测 · DPI 与 100 次开关；M4a · .xapk/.apks/.apkm，2026-11-04）
+
+### 环境
+
+与 §0 基线一致：Windows 11 x64、100% 显示缩放、驱动 MSVC 14.51（VS 18）+ Ninja；
+扩展以 HKCU 注册（`.apk/.xapk/.apks/.apkm`）；本记录开始前重启过一次 `explorer.exe`（换新 DLL）。
+
+### 变更（M3 侧：让 DPI 可自动验）
+
+`"150%/200% 下不裁切"` 原本只能人眼在真实缩放下看。这次把布局数学从
+`prop_page.cpp::Relayout` 抽成纯函数：
+
+```
+PageLayout ComputePageLayout(int dpi, int width, int height, bool show_hash, bool show_retry)
+```
+
+（`src/propsheet/page_layout.{h,cpp}`，进 `apksx_pagemodel` 库；`Relayout` 只把算出来的矩形交给 `MoveWindow`）。
+`propsheet_model_test --selftest` 增加布局扫描：6 档 DPI（96/120/144/168/192/240，即 100%–250%）×
+客户区 360–900 × 400–1000 DIP × 4 种按钮组合 = **20,832 个组合**，每个组合断言 5 条不变量。
+
+### 结果 · 布局 / DPI
+
+```
+selftest: page layout / dpi
+  (swept 20832 layouts: dpi 96..240 x client 360..900 x 400..1000 DIP x 4 variants)
+  ok   所有控件都在客户区内（无裁切）
+  ok   没有任何负宽高
+  ok   底栏按钮/状态文字互不重叠
+  ok   头部文字不压图标
+  ok   列表不与头部/底栏重叠
+  ok   96 DPI 图标为 32px @ (12,12)
+  ok   96 DPI 列表左右各留 12px
+  ok   96 DPI 按钮宽度 128 / 112
+  ok   96 DPI 底栏高 34px、按钮高 24px
+  ok   150%/200% 图标按比例放大到 48px / 64px
+  ok   150%/200% 内边距按比例放大
+  ok   200% 列表宽度是 100% 的两倍
+```
+
+黄金值固定了 100% 的几何（改动布局会先炸这里），等比断言固定了 150%/200% 的缩放关系。
+
+### 结果 · 100 次开关（句柄趋势）
+
+命令：`powershell -File tools/propsheet-stress.ps1 -ApkPath tests\fixtures\real\aida64-1.94.apk -Cycles 100`
+
+```
+explorer handles before: 9376
+  cycle  25: handles=9934 apkinfo=0
+  cycle  50: handles=9395 apkinfo=0
+  cycle  75: handles=9260 apkinfo=0
+  cycle 100: handles=9177 apkinfo=0
+explorer handles after 100 cycles: 9177 (delta -199)
+leftover apkinfo processes: 0
+```
+
+判据（"explorer 句柄/私有提交无单调增长"）：**通过**。前 20 次有一次性爬升（9376→9934，属性窗初次创建），
+30 次之后回落到 9398 并持续下降；结束时比开始时低 199。残留 `apkinfo.exe` 全程为 0。
+
+容器样本同样跑了一遍（`-ApkPath build\m4a-view\Poweramp.xapk -Cycles 20`，20 次都是解析
+`.xapk` 的内层 base）：
+
+```
+explorer handles before: 2236
+  cycle  5: handles=2063 apkinfo=0
+  cycle 20: handles=2062 apkinfo=0
+explorer handles after 20 cycles: 2062 (delta -174)
+leftover apkinfo processes: 0
+```
+
+（before 只有 2236 是因为本会话重启过 explorer；20 次之间句柄持平，结束比开始低 174，无泄漏迹象。）
+
+### 结果 · M4a（多 APK 容器）
+
+| 样本 | kind | base | APK 数 | 图标来源 | worker | 缩略图（进程内 / 经 shell） |
+| --- | --- | --- | --- | --- | --- | --- |
+| Poweramp ...APKPure.xapk（22 MB） | xapk | `com.maxmpz.audioplayer.apk` | 2（base + `config.armeabi_v7a`） | `res/mipmap-xxxhdpi-v9/app_icon_rounded.png` 192×192 | 13.6 ms | 24 ms / 110 ms（冷，含 dllhost） |
+| PUBG ...APKPure.xapk（**1.25 GB**） | xapk | `com.tencent.ig.apk` | 1（base 107 MB + 1.1 GB obb） | `res/hW.png` 192×192 | 9.5–12.4 ms | 35 ms / 20 ms（冷/热） |
+
+- `tests/verify_container.py`：**2/2 一致**（package / versionCode / versionName / minSdk / targetSdk 对
+  `aapt2 dump badging`；`splits` 对 ZIP 里根目录的 `*.apk` 列表；图标条目在 base 里确实存在）。
+- 坏容器（`tests/gen_container_fixtures.py` 造）：4/4 优雅失败——
+
+```
+xapk_no_apk.xapk        apkinfo exit=2  「包内既没有 AndroidManifest.xml，也没有内层 .apk」
+xapk_broken_base.xapk   apkinfo exit=2  「容器里的 base.apk 打不开（中央目录损坏）」
+xapk_bomb_base.xapk     apkinfo exit=2  同上（假炸弹先被 ZIP 结构挡住，没有无限解压）
+xapk_truncated.xapk     apkinfo exit=2  「未找到 ZIP 结束记录（不是有效 ZIP）」
+```
+
+  `thumbtest --file` 对这四个全部 `ok:false`、耗时 1.7–3.5 ms，进程不崩、不留负缓存之外的副作用。
+
+- Explorer 证据：`docs/evidence/m4a-xapk-explorer.png`（三个文件的大图标视图：`aida64.apk` 出 AIDA64 图标、
+  `Poweramp.xapk` 出 Poweramp 图标、`PUBG.xapk` 出 PUBG 图标）。
+- 属性页证据：`docs/evidence/m4a-xapk-propsheet.png`（Poweramp 头部 + 应用/技术/权限组，解析完成 282 ms）、
+  `docs/evidence/m4a-xapk-propsheet-splits.png`（滚动到底：「分包 · 2 项」= `[base] com.maxmpz.audioplayer.apk（15.1 MB）`、
+  `[配置] config.armeabi_v7a.apk（6.0 MB）`；「文件与签名」组首两行 = `内层 APK` 与 `安装包类型 XAPK（2 个 APK）`）。
+- 单元：`propsheet_model_test --selftest` 全绿（含新增的 container/splits 断言与布局扫描）。
+
+### 未验证（不许当作通过）
+
+1. **真实 150%/200% 显示缩放下的人眼确认**：本次证明的是布局数学（几何不越界/不重叠/等比），
+   字体渲染与真实对话框尺寸仍需要在 150%/200% 缩放下开一次属性页看一眼。
+2. `.apks`（bundletool）与 `.apkm`（APKMirror）**没有真实样本**：只有启发式（`toc.pb`/`info.json`）与坏样本。
+3. **deflate 的 base.apk**：两个真实样本的 base 都是 Stored（走 `SliceSource`），512 MB 上限那条分支没有真实数据。
+4. **容器根 `icon.png` 兜底**：两个样本的 base 里都有 launcher 图标，兜底路径只被代码覆盖，未被样本触发。
+5. 嵌套两层以上（zip 套 zip 套 zip）没有测；`formats.md §8` 的限额是 ≤ 2 层。
+6. `.hap`（M4d 对象）不在本记录范围内。

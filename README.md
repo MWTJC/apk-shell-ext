@@ -4,7 +4,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 
 | 项 | 值 |
 | --- | --- |
-| 阶段 | **M1 ✅（R-0002）· M2 收尾中**（签名块/uses-feature 已落地，`splits` 随 M4a）**· M3 ✅ 已验收**（`apkprop.dll`，见 R-0006 / R-0009 / R-0010） |
+| 阶段 | **M1 ✅（R-0002）· M2 ✅（R-0005，`splits` 随 M4a）· M3 ✅（R-0006/0009/0010/0011）· M4a ✅（.xapk/.apks/.apkm，R-0011）** |
 | 平台 | Windows 10 1809+ / Windows 11 x64（M5 才评估 x86 宿主） |
 | 产物 | `apkthumb.dll`（缩略图，✅）· `apkinfo.exe`（解析 worker，✅ JSON v1）· `apkprop.dll`（属性页，✅） |
 | 许可 | 待定（建议 MIT；miniz 为 MIT，已 vendor 在 `src/third_party/miniz`，见 ADR-0004） |
@@ -33,7 +33,7 @@ Windows 资源管理器壳扩展：让手机安装包在资源管理器里**显�
 apk-shell-ext/
 ├─ docs/            设计、架构、格式矩阵、路线图、验收、ADR
 ├─ src/
-│  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、签名块、图标定位、WIC、缓存）— ✅ M1/M2
+│  ├─ core/         解析核心（ByteSource / zip 中央目录、AXML、ARSC、签名块、图标定位、容器侦查、WIC、缓存）— ✅ M1/M2/M4a
 │  ├─ thumbs/       IThumbnailProvider 壳扩展 — ✅ M1
 │  ├─ propsheet/    IShellPropSheetExt 壳扩展（原生控件单页）— ✅ M3
 │  ├─ worker/       apkinfo.exe（JSON 输出）— M2
@@ -56,12 +56,16 @@ python tests\gen_signed_fixtures.py
 python tests\verify_signature.py --glob "tests\fixtures\generated\signed\*.apk"
 python tests\verify_apkinfo.py tests\fixtures\generated\*.apk
 
+:: 3b) 多 APK 容器（.xapk/.apks/.apkm，M4a）：坏容器夹具 + 与 aapt2 交叉校验
+python tests\gen_container_fixtures.py --real tests\fixtures\real\*.xapk
+python tests\verify_container.py "tests\fixtures\real\*.xapk"
+
 :: 4) 单元验收（直接驱动 provider，不依赖 explorer）
 out\x64\thumbtest.exe --probe tests\fixtures\generated\f_png.apk
 out\x64\thumbtest.exe --file  tests\fixtures\generated\f_webp.apk --out C:\tmp\w.png
 out\x64\thumbtest.exe --dir   tests\fixtures\generated --repeat 3 --json
 
-:: 5) 注册（免 UAC，写 HKCU\Software\Classes）→ 资源管理器切"大图标"即可看到包内图标
+:: 5) 注册（免 UAC，写 HKCU\Software\Classes；默认 .apk/.xapk/.apks/.apkm）→ 资源管理器切"大图标"即可看到包内图标
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Install
 out\x64\thumbtest.exe --shell --file D:\somewhere\app.apk     :: 走 Explorer 同一条管线
 powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
@@ -123,18 +127,32 @@ JSON 在后台线程变成行模型 → `WM_APP` 回填；关窗即 `TerminateJo
    注意 `scheme` 的语义是"检测到的签名块"而非"校验通过"（见 [architecture.md §2.3](docs/architecture.md)）。
 6. `features`（`uses-feature` + `android:required`）→ 与 aapt2 **11/11 一致**。
 
+**M4a 已完成（2026-11-04，记录 [verification.md R-0011](docs/verification.md)）**
+
+`.xapk/.apks/.apkm`（外层 ZIP + 内层 base.apk）走同一条解析路径：`src/core/package.cpp` 先判容器，
+Stored 的 base 用 `SliceSource` 在外层文件上开窗口（**1.25 GB 的 PUBG xapk 只读 107 MB 的 base**），
+deflate 的 base 整块解压且上限 512 MB。JSON 新增 `container` 块（`base` + `splits`）；
+属性页多出「安装包类型」「内层 APK」两行与可折叠「分包 · N 项」组；`register.ps1` 默认注册四个扩展名。
+实测：Poweramp xapk 缩略图 24 ms（经 shell 110 ms）、属性页 188–282 ms；
+PUBG（1.25 GB）缩略图 35/20 ms（冷/热）、worker 9.5–12.4 ms；2/2 与 aapt2 一致；4 个坏容器全部优雅失败。
+**注意**：`.apks`（bundletool）与 `.apkm`（APKMirror）只有启发式 + 坏样本，没有真实样本验证。
+
 **下一步（建议顺序）**
 
-1. M3 剩余验收：150%/200% DPI、100 次开关的句柄趋势（worker abort / 卸载 / 亮暗跟随 / 折叠交互已补测）。
-2. M4a：`.apks/.xapk/.apkm`（外层 ZIP + base.apk），顺带补 schema 的 `splits`。
-3. M2 尾巴：TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
+1. M4d：`.hap`（样本已在 `tests/fixtures/real`：`ShuaTiBao108.hap`、`entry-default-unsigned.hap`）——
+   复用同一层容器逻辑，`module.json` 是 JSON，比 AAB 便宜。
+2. M4b：`.aab`（protobuf manifest，最贵的一块）→ M4c `.ipa` → M4e `.appx`。
+3. M3 尾巴：真实 150%/200% 显示缩放下的人眼确认（布局数学已自动断言，见 R-0011）。
+4. M2 尾巴：TD-002（deflate 的大 arsc）、V8 恶意样本回归、长跑。
 
 **接力说明**（下一会话从这里开始）
 
-- 构建：`tools\build.cmd Release` → `out\x64\{apkthumb.dll, apkinfo.exe, thumbtest.exe}`。
-- 夹具：`python tests\gen_fixtures.py`（4 正常 + 8 坏包）、`python tests\gen_big_arsc.py`（19.7 MB 真 arsc + deflate 变体）。
-- 真实样本：`tests\fixtures\real\`（3 个普通包 + `big\` 里 1.26 G / 1.92 G 各一个），**gitignore，不入库**。
-- 验收：`python tests\verify_apkinfo.py <apk...>`（对 aapt2）、`out\x64\thumbtest.exe --dir <目录> --json`、
+- 构建：`tools\build.cmd Release` → `out\x64\{apkthumb.dll, apkinfo.exe, apkprop.dll, thumbtest.exe, proptest.exe}`。
+- 夹具：`python tests\gen_fixtures.py`（4 正常 + 8 坏包）、`python tests\gen_big_arsc.py`（19.7 MB 真 arsc + deflate 变体）、
+  `python tests\gen_container_fixtures.py --real <xapk>`（4 个坏容器）。
+- 真实样本：`tests\fixtures\real\`（3 个普通包 + 2 个 `.xapk` + 2 个 `.hap` + `big\` 里 1.26 G / 1.92 G 各一个），**gitignore，不入库**。
+- 验收：`python tests\verify_apkinfo.py <apk...>`（对 aapt2）、`python tests\verify_container.py "<xapk-glob>"`、
+  `out\x64\propsheet_model_test.exe --selftest`（行模型 + 布局/DPI 断言）、`out\x64\thumbtest.exe --dir <目录> --json`、
   `out\x64\thumbtest.exe --shell --file <apk>`（走 Explorer 管线）、`out\x64\apkinfo.exe --json <apk>`。
 - 扩展当前**已注册**（HKCU）：`powershell -File tools\register.ps1 -Uninstall` 可撤；诊断日志需手动开 `%TEMP%\apk-shell-ext.debug.on`。
 

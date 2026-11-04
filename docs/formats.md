@@ -28,7 +28,20 @@
 5. **图标候选**：优先 `mipmap`，其次 `drawable`；density 优先级 xxxhdpi > xxhdpi > xhdpi > hdpi > mdpi > nodpi > anydpi（anydpi 通常是 adaptive XML）。
 6. **adaptive icon**：`<adaptive-icon><background/><foreground/></adaptive-icon>`，两层都是资源引用（可能是颜色或图片）。M2 支持合成（前景居中叠背景），失败回退纯前景。
 
-**split APK 处理**：`.apks/.xapk/.apkm` 外层有 `base.apk` + `split_config.*.apk` + 可选 `icon.png`/`manifest.json`。v1 只读 `base.apk`；若 base 缺失（少见），按包名合并取最大 split。安装体积/ABI 列表在属性页才汇总。
+**split APK 处理（M4a 已落地，见 [verification.md R-0011](verification.md)）**：`.apks/.xapk/.apkm` 外层有
+`base.apk` + `split_config.*.apk` + 可选 `icon.png`/`manifest.json`。v1 只读 `base.apk`，不做跨 split 合并。
+
+- **侦查顺序**：外层根上有 `AndroidManifest.xml` → 就是 APK；否则收根上的 `*.apk`（子目录里的
+  `Android/obb/...` 之类不参与）。种类按元数据文件判定：`toc.pb` → apks（bundletool）、
+  `manifest.json` → xapk（APKPure）、`info.json` → apkm（APKMirror），都没有 → `splits`。
+- **base 选择**：① 名字就是 `base.apk`；② xapk 的 `manifest.json` 里 `package_name` + `.apk`；
+  ③ 排除 `config.*` / `split_*` 后最大的；④ 全部里最大的。选中的那个在 JSON 里标 `base: true`。
+- **base 的取法**：Stored → `SliceSource` 在外层文件上开窗口（1.25 GB 的 xapk 也不读进内存）；
+  Deflate → 整块解压，上限 **512 MB**，超限报错而不是硬啃。
+- **图标兜底**：base 里没有 launcher 图标时用容器根上的 `icon.png`（`icon.fromContainer: true`）。
+- **真实样本（不入库）**：`Poweramp ...APKPure.xapk`（2 个 APK：base + `config.armeabi_v7a`）、
+  `PUBG ...APKPure.xapk`（1.25 GB，base 107 MB + 1.1 GB obb，只读 base）。两个包与 `aapt2 dump badging`
+  的 package/versionCode/versionName 完全一致（`tests/verify_container.py`）。
 
 ## 3. AAB（Android App Bundle）
 
