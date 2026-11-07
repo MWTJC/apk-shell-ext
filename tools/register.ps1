@@ -305,11 +305,36 @@ function Install-PropsheetHandler {
     }
 }
 
+function Remove-GlobalRegistrations {
+    # Debugging often ends up with the handler also hung under HKCR\*\shellex or
+    # AllFilesystemObjects "just to try it globally". That makes the property page show up on
+    # EVERY file (the one WinRAR never does) and is not something the installer ever writes, so
+    # both install and uninstall sweep it away. Only values that are exactly our own CLSIDs are
+    # touched; other vendors' handlers are left alone.
+    $groups = @('shellex\PropertySheetHandlers', ('ShellEx\' + $ThumbHandlerId))
+    foreach ($target in @('*', 'AllFilesystemObjects')) {
+        foreach ($group in $groups) {
+            $root = Join-Path $ClassesRoot ($target + '\' + $group)
+            if (-not (Test-Path -LiteralPath $root)) { continue }
+            foreach ($child in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                $value = $child.GetValue('', $null)
+                if ($value -eq $PropClsid -or $value -eq $ThumbClsid) {
+                    $keyPath = Join-Path $root $child.PSChildName
+                    Remove-Item -LiteralPath $keyPath -Recurse -Force
+                    Write-Host "[clean] removed global registration $keyPath -> $value"
+                }
+            }
+        }
+    }
+}
+
 if ($Uninstall) {
+    Remove-GlobalRegistrations
     Uninstall-Handler
 } else {
     if ($Feature -eq 'All' -or $Feature -eq 'Thumb') { Install-ThumbHandler }
     if ($Feature -eq 'All' -or $Feature -eq 'Propsheet') { Install-PropsheetHandler }
     if ($Feature -eq 'All' -or $Feature -eq 'Icons') { Install-IconsHandler }
+    Remove-GlobalRegistrations
     Notify-Shell
 }

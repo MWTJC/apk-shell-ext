@@ -169,6 +169,13 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
   `verify-install.ps1 -Features`。
 - **改文案**：界面文案只改 `src/core/i18n.cpp` 的表；解析器错误保留 core 里的中文原文，
   由 `TrMsg` 字典在 worker 出口翻译。`propsheet_model_test --selftest` 会钉住中文断言。
+- **1.0.1（[R-0019](verification.md)）属性页两处修复**：① 页头图标改走 `core/package.h` 的
+  `ReadPackageIcon`（`.xapk/.hap` 以前没图标，因为退路只认根上的 `AndroidManifest.xml`）；
+  ② `*\shellex\PropertySheetHandlers` 上的调试残留会让**每个文件**都多出一页——`register.ps1` 安装/卸载
+  都会清（只删值等于我们自己 CLSID 的键），`verify-install.ps1 -Phase check` 会断言它不存在，
+  `apkinfo --status` 会打印「全域注册：有/无」。
+  产物已在 `out\dist\apk-shell-ext-setup-1.0.1.exe`；**真实覆盖安装与发版还没做**，步骤见
+  [release.md](release.md)（本机 1.0.0 是整机安装，需要一次 UAC）。
 
 ## 10. 变更纪律
 

@@ -1533,3 +1533,87 @@ gh release create v1.0.0 out/dist/apk-shell-ext-setup-1.0.0.exe --title "v1.0.0"
    历史里最大的 blob 是 `tests/fixtures/src/f_bigarsc_real/res/values-zh-rCN/strings.xml`（14 MB 夹具源码，
    造大 arsc 用），没有二进制/真实样本入库。
 3. 没有 GitHub Actions，也没有分支保护；`main` 允许直接推送。
+
+## 27. R-0019 记录（属性页两处缺陷：每种文件都出页 / xapk·hap 页头无图标，2026-11-07）
+
+### 环境
+
+与 §0 一致。被测安装是 1.0.0 的**整机**安装（`C:\Program Files\apk-shell-ext`，2026-11-04 产物）；
+本轮会话非管理员，所有代码级验收都在 `out\x64` 的新构建上做，注册用 `register.ps1 -Scope CurrentUser`
+（HKCU 覆盖 HKLM），验完即回滚。
+
+### 现象（用户报告）
+
+1. 任何文件右键 → 属性都多出「安装包信息」一页；WinRAR 只在压缩文件上出现自己的页，说明这是能做到的。
+2. `.xapk` / `.hap` 的页头没有应用图标，`.apk` 有；缩略图视图里三者都正常。
+
+### 根因 1：一条调试期的手工全局注册
+
+```
+HKCU\Software\Classes\*\shellex\PropertySheetHandlers\ApkInfoTest = {A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B02}
+```
+
+`*` 是"所有文件"的类，Explorer 于是对每个文件都 QI 我们的 `IShellPropSheetExt`。
+安装器（`installer\apk-shell-ext.iss`）与 `tools\register.ps1` 都只按扩展名逐个写，
+**产品代码从没写过这条**——它是 M3 调试期"试试全局"留下的，当时的收尾只撤了 `HKCR\*` 上另外几条却漏了它。
+
+证据（同一时刻）：`reg query "HKCR\*\shellex\PropertySheetHandlers" /s` 里能看到上面这条；
+而 HKCU 下 `.apk/.xapk/.apks/.apkm/.hap` 都**没有** `shellex\PropertySheetHandlers`
+（属性页注册只在 HKLM 的安装里，`HKCR\.apk\shellex\PropertySheetHandlers\ApkInfo`）。
+所以"每类文件都有页"只能来自那条 `*`。
+
+### 根因 2：页头图标退路绕开了 core 的 resolver
+
+`src/propsheet/prop_page.cpp` 的 `DecodeIconFromZip` 自己 `zip.Open(path)` 后直接调
+`LocateApkIconInZip()`——这条路径的前提是"根上有 `AndroidManifest.xml`"：
+
+| 格式 | 外层 ZIP 根上的清单 | `LocateApkIconInZip` |
+| --- | --- | --- |
+| `.apk` | `AndroidManifest.xml` | 成功 |
+| `.xapk/.apks/.apkm` | `manifest.json` / `toc.pb` / `info.json` + 若干 `*.apk` | 失败（没有 AXML 可读） |
+| `.hap` | `module.json` | 失败（HAP 的图标在 `resources.index` + `$media:`） |
+
+缩略图没有这个毛病，因为它走 `core/package.h` 的 `ReadPackageIcon`（容器先进 base.apk、
+HAP 走 `module.json`），**同一件事在两个地方各写了一遍**，症状就是"缩略图有、属性页没有"。
+页头先查缩略图缓存，命中时看起来是好的，但属性页的缓存键（按路径 + 文件戳）与 dllhost 的流模式键
+本来就不同，命中属偶然。
+
+### 变更
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/propsheet/prop_page.cpp` | `DecodeIconFromZip` → `DecodeIconFromPackage`：改用 `ReadPackageIcon`（与缩略图同一条 resolver），仍是"只读中央目录 + 若干条目"，仍在 worker 线程里做 |
+| `tools/register.ps1` | 新增 `Remove-GlobalRegistrations`：安装与卸载都扫 `*\shellex\PropertySheetHandlers`、`AllFilesystemObjects\shellex\PropertySheetHandlers`、`*\ShellEx\{E357FCCD…}`，**只删值等于我们自己两个 CLSID 的子键** |
+| `tools/verify-install.ps1` | `check` 的 installed / removed 两种状态都多一条断言：不允许存在全域注册 |
+| `src/worker/support.cpp` | `--status` 新增一行「全域注册：有/无（+具体键）」；顺手修好 `prop=` 只读 HKCU 的老毛病（整机安装时错报 `-`，应为「整机」） |
+| `src/version.h` | 1.0.0 → 1.0.1（补丁号；行为修复，不新增能力） |
+
+### 结果
+
+| 断言 | 方法 | 结果 |
+| --- | --- | --- |
+| 全局注册能被自动清掉 | `register.ps1 -Install -Scope CurrentUser` | `[clean] removed global registration …\ApkInfoTest -> {…7B02}`；随后 `reg query` 该键为空 |
+| `.txt` 不再有这一页 | `capture-propsheet.ps1` 打开 `apksx-control.txt` | 标签只有 常规 / 数字签名 / 文件校验 / 安全 / 详细信息 / 以前的版本（`r0019-propsheet-txt-no-tab.png`） |
+| `.apk` 页头图标（回归） | `aida64-1.94.apk` | 图标在，解析完成 109 ms（`r0019-propsheet-apk-icon.png`） |
+| `.xapk` 页头图标 | Poweramp 22 MB | 图标在，140 ms（`r0019-propsheet-xapk-icon.png`） |
+| 1.25 GB `.xapk` | PUBG 4.6.0 | 图标在，141 ms（`r0019-propsheet-xapk-big-icon.png`；base 是 Stored，不解压） |
+| `.hap` 页头图标 | `ShuaTiBao108.hap` / `entry-default-unsigned.hap` | 都在，125 / 187 ms（`r0019-propsheet-hap-icon.png`） |
+| 坏包仍优雅降级 | 文本改名 `.hap` | 无图标、头部收成一行、页内"文件太小，不是有效 ZIP"＋重试（`r0019-propsheet-broken-no-icon.png`） |
+| 图标不是缓存命中造成的假象 | `apkinfo --clear-cache` 后立刻截图；`%LOCALAPPDATA%\apk-shell-ext\thumbs` 只有一条 `.fail`、没有 PNG | 页头图标只能来自 `DecodeIconFromPackage` |
+| 行模型单测 | `propsheet_model_test --selftest` | 71 条 `ok`，0 失败 |
+| 新断言不误报 | `verify-install.ps1 -Phase check -State installed -Scope machine` | `[check] installed : ok` |
+| `--status` 能看见全域残留（先造再删） | 手工建 `HKCU\…\*\shellex\PropertySheetHandlers\ApkInfoProbe -> {…7B02}` 后跑 `apkinfo --status` | `全域注册：有（Software\Classes\*\shellex\PropertySheetHandlers\ApkInfoProbe）`；删掉后回到「无」 |
+| `--status` 的 prop 归属 | `apkinfo --status`（整机安装） | 五个扩展名都是 `prop=整机`（此前错报 `-`） |
+| 测试注册可回滚 | `register.ps1 -Uninstall -Scope CurrentUser` | HKCU 下 `.xapk`、`{…7B01}`、`{…7B02}` 全消失（`reg query` 空） |
+
+### 未验证 / 注意
+
+1. **1.0.1 安装包没有在本机做真实覆盖安装**：现存 1.0.0 是整机安装（写 `C:\Program Files`），
+   本轮会话非管理员，无法静默升级。复核方式：双击 `out\dist\apk-shell-ext-setup-1.0.1.exe`
+   （同一 AppId，选"为所有用户安装"即就地覆盖），然后只看两条——任意 `.txt` 没有这一页、
+   `.xapk/.hap` 的页头有图标。
+2. `proptest.exe --capture` 在本机 build 上仍然拍不到页（`PropertySheetW` 返回 −1，R-0009 起的老问题），
+   所以全部截图来自真实资源管理器对话框，不是测试宿主。
+3. 页头图标现在与缩略图共用 resolver，代价是 `.xapk` 的 deflate base 会整块解压（上限 512 MB，与缩略图一致）；
+   本轮两个样本的 base 都是 Stored，没测到 deflate 容器在 1.5 s 预算内解不出来的情况——那时页头会像坏包一样无图标，
+   不会拖住页面（解析在 worker 线程，预算 1500 ms）。

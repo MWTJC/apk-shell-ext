@@ -118,6 +118,44 @@ bool ReadStringNamed(HKEY root, const std::wstring& subkey, const wchar_t* name,
   return ok;
 }
 
+// 扫描"所有文件"类（`*` / `AllFilesystemObjects`）上有没有挂着我们的 handler。
+// 挂着的话属性页会出现在**每一个文件**上（调试期手写注册的典型残留，安装器从不这么写），
+// 所以 --status 必须能直接看见，而不是让用户猜。
+bool FindGlobalRegistration(HKEY root, std::wstring* where) {
+  const wchar_t* targets[] = {L"*", L"AllFilesystemObjects"};
+  const std::wstring groups[] = {L"\\shellex\\PropertySheetHandlers",
+                                 std::wstring(L"\\ShellEx\\") + kThumbHandlerId};
+  for (const wchar_t* target : targets) {
+    for (const std::wstring& group : groups) {
+      const std::wstring base = std::wstring(L"Software\\Classes\\") + target + group;
+      HKEY key = nullptr;
+      if (::RegOpenKeyExW(root, base.c_str(), 0, KEY_READ | KEY_WOW64_64KEY, &key) !=
+          ERROR_SUCCESS) {
+        continue;
+      }
+      wchar_t name[256] = {};
+      for (DWORD index = 0;; ++index) {
+        DWORD length = ARRAYSIZE(name);
+        if (::RegEnumKeyExW(key, index, name, &length, nullptr, nullptr, nullptr, nullptr) !=
+            ERROR_SUCCESS) {
+          break;
+        }
+        const std::wstring child = base + L"\\" + name;
+        std::wstring value;
+        if (ReadStringNamed(root, child, nullptr, &value) &&
+            (::_wcsicmp(value.c_str(), kPropClsid) == 0 ||
+             ::_wcsicmp(value.c_str(), kThumbClsid) == 0)) {
+          *where = child;
+          ::RegCloseKey(key);
+          return true;
+        }
+      }
+      ::RegCloseKey(key);
+    }
+  }
+  return false;
+}
+
 bool WriteStringNamed(HKEY root, const std::wstring& subkey, const wchar_t* name,
                       const std::wstring& value) {
   HKEY key = nullptr;
@@ -255,18 +293,31 @@ int RunStatusCommand() {
   Print(L"  整机目录：%ls（%ls）\n", machine_dir.c_str(), present(machine_dir));
 
   for (const auto& ext : kExtensions) {
-    std::wstring thumb, thumb_machine, prop, icon;
+    std::wstring thumb, thumb_machine, prop, prop_machine, icon;
     std::wstring key = ClassesKey(L".");
     key += ext;
     const bool user_thumb = ReadString(HKEY_CURRENT_USER, key + L"\\ShellEx\\" + kThumbHandlerId, &thumb);
     const bool machine_thumb =
         ReadString(HKEY_LOCAL_MACHINE, key + L"\\ShellEx\\" + kThumbHandlerId, &thumb_machine);
-    const bool user_prop = ReadString(
-        HKEY_CURRENT_USER, key + L"\\shellex\\PropertySheetHandlers\\" + kPropHandlerName, &prop);
+    const std::wstring prop_key = key + L"\\shellex\\PropertySheetHandlers\\" + kPropHandlerName;
+    const bool user_prop = ReadString(HKEY_CURRENT_USER, prop_key, &prop);
+    const bool machine_prop = ReadString(HKEY_LOCAL_MACHINE, prop_key, &prop_machine);
     const bool user_icon = ReadString(HKEY_CURRENT_USER, key + L"\\DefaultIcon", &icon);
     Print(L"  .%-5ls thumb=%ls prop=%ls\n", ext,
-          user_thumb ? L"用户" : (machine_thumb ? L"整机" : L"-"), user_prop ? L"用户" : L"-");
+          user_thumb ? L"用户" : (machine_thumb ? L"整机" : L"-"),
+          user_prop ? L"用户" : (machine_prop ? L"整机" : L"-"));
     if (user_icon) Print(L"          icon=%ls\n", icon.c_str());
+  }
+
+  // 属性页只按扩展名注册（ADR-0002）。全域（`*`）上的残留会让每个文件都多一页，属调试残渣，
+  // --status 直接报出来，不用用户去猜。
+  std::wstring global_key;
+  if (FindGlobalRegistration(HKEY_CURRENT_USER, &global_key) ||
+      FindGlobalRegistration(HKEY_LOCAL_MACHINE, &global_key)) {
+    Print(L"  全域注册：有（%ls）\n", global_key.c_str());
+    Print(L"            它会让每个文件的属性里都多出「安装包信息」；删掉该键并重启资源管理器\n");
+  } else {
+    Print(L"  全域注册：无（信息页只出现在 .apk/.xapk/.apks/.apkm/.hap 上）\n");
   }
 
   // 卸载入口是否存在（Inno 的 AppId 见 installer\apk-shell-ext.iss）

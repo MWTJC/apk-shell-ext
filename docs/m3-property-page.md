@@ -284,8 +284,9 @@ QI(IShellPropSheetExt) → CreateInstance → QI(IShellPropSheetExt) → QI(IShe
 ### 与方案的偏差
 
 1. **头部图标加了"本地解一个条目"的退路**：缩略图缓存在 dllhost/stream 模式下用的键与"按路径"不同，
-   属性页不一定命中。现在先查缓存，未命中就在 worker 线程里用 core 解一个图标条目（与 `apkthumb` 同一套代码，
-   仍然只读中央目录 + 一个条目，不做全量解析）。图标解码失败就画占位方块。
+   属性页不一定命中。现在先查缓存，未命中就在 worker 线程里读一张图标（与 `apkthumb` 同一套代码，
+   仍然只读中央目录 + 若干条目，不做全量解析）。图标解码失败就画占位方块。
+   **2026-11-07 起改为 `ReadPackageIcon`（容器/HAP 同一条 resolver），见 §17。**
 2. **`PSM_INITDIALOG` 之后先画骨架**：label 用文件名兜底、组标题为"正在解析…"，避免空窗口。
 3. 错误态的行用"空键"绘制（从左边距开始），不再占键列。
 
@@ -410,3 +411,20 @@ v5 时把**组标题降级成普通行**插在明细前面（`应用`、`技术`
 
 仍未做的是**真实缩放下的肉眼确认**（字体渲染、真实对话框尺寸），已在
 [verification.md R-0011](verification.md) 的"未验证"里单列。
+
+## 17. 页头图标改走 core 的 resolver（2026-11-07）
+
+**现象**：`.xapk` / `.hap` 的属性页头部没有应用图标，`.apk` 有；缩略图视图里三者都正常。
+
+**原因**：§14 偏差第 1 条那条退路是自己 `zip.Open(path)` 后调 `LocateApkIconInZip()`——它只认
+"外层 ZIP 根上有 `AndroidManifest.xml`"。`.xapk/.apks/.apkm` 根上是 `manifest.json` / `toc.pb` /
+`info.json` 加若干 `*.apk`，`.hap` 根上是 `module.json`，所以在 resolver 之外必然失败。
+页头先查缩略图缓存，命中时看着是好的，但属性页的缓存键（按路径 + 文件戳）与 dllhost 的流模式键不同，
+命中只是偶然——"缩略图有、属性页没有"就是这样长出来的。
+
+**现在**：`DecodeIconFromPackage` 直接调 `core/package.h` 的 `ReadPackageIcon`，与 `apkthumb` 同一条路径：
+容器先进 base APK、HAP 走 `module.json` + `$media:`、两者都没有时退到容器根上的 `icon.png`。
+仍然只在 worker 线程里做、仍然只有 1.5 s 预算，所以页头出不来图标也不会拖住对话框。
+
+**验收**：[verification.md R-0019](verification.md)——Poweramp 22 MB / PUBG 1.25 GB 两个 `.xapk`、
+两个 `.hap` 页头都有图标（125–187 ms），`.apk` 无回归，坏包仍是"无图标 + 页内报错"而不是空白框。

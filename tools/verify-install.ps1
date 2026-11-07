@@ -68,6 +68,26 @@ function OwnedRegistryPaths {
     return $paths | Sort-Object -Unique
 }
 
+function GlobalRegistrations {
+    # Anything of ours hung under HKCR\* or AllFilesystemObjects would attach the property page to
+    # every file type (only per-extension registration is allowed: ADR-0002). Report, never repair
+    # here - this script only asserts.
+    $hits = @()
+    foreach ($target in @('*', 'AllFilesystemObjects')) {
+        foreach ($group in @('shellex\PropertySheetHandlers', ('ShellEx\' + $ThumbHandlerId))) {
+            $root = Join-Path $Classes ($target + '\' + $group)
+            if (-not (Test-Path -LiteralPath $root)) { continue }
+            foreach ($child in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                $value = $child.GetValue('', $null)
+                if ($value -eq $PropClsid -or $value -eq $ThumbClsid) {
+                    $hits += (Join-Path $root $child.PSChildName)
+                }
+            }
+        }
+    }
+    return $hits
+}
+
 function Read-Tree([string]$root) {
     $lines = @()
     if (-not (Test-Path -LiteralPath $root)) {
@@ -180,6 +200,11 @@ switch ($Phase) {
                 $left = @(Get-ChildItem -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue)
                 if ($left.Count -gt 0) { $problems += "residue files: $($left.Count) in $InstallDir" }
             }
+        }
+
+        # Applies to both states: we never own a wildcard / AllFilesystemObjects registration.
+        foreach ($hit in (GlobalRegistrations)) {
+            $problems += "global registration: $hit (would put the property page on every file)"
         }
 
         if ($problems.Count -eq 0) {

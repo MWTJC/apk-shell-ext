@@ -26,11 +26,12 @@
 #include <utility>
 #include <vector>
 
-#include "core/apk_icon.h"
+#include "core/apk_icon.h"  // Deadline（统一预算计时器）
 #include "core/common.h"
 #include "core/i18n.h"
 #include "core/json_lite.h"
 #include "core/log.h"
+#include "core/package.h"
 #include "core/thumb_cache.h"
 #include "core/wic_image.h"
 #include "core/zip_reader.h"
@@ -92,21 +93,19 @@ bool CopyTextToClipboard(HWND hwnd, const std::wstring& text) {
   return ok;
 }
 
-// 头部图标：缩略图缓存优先；否则在小工作线程里解一个图标条目（只读清单 + 一个条目）
-HBITMAP DecodeIconFromZip(const std::wstring& path, int size) {
+// 头部图标：缩略图缓存优先；否则按**与缩略图完全相同的一条路径**取一张图标。
+// 这里必须走 core 的 resolver（ReadPackageIcon）：容器 .xapk/.apks/.apkm 要先进 base.apk，
+// HAP 要走 module.json，单个 APK 才是"根上就有 AndroidManifest"。绕开 resolver 的写法
+// 只有 APK 能出图，xapk/hap 的页头会是空白（2026-11-07 修的就是这个）。
+HBITMAP DecodeIconFromPackage(const std::wstring& path, int size) {
   apksx::ZipReader zip;
   apksx::Error err;
   if (!zip.Open(path, &err)) return nullptr;
   const apksx::Deadline deadline(1500);
-  apksx::IconLocation icon;
-  apksx::ManifestInfo manifest;
-  if (!apksx::LocateApkIconInZip(zip, &icon, &manifest, &err, &deadline)) return nullptr;
-  const apksx::ZipEntry* entry = zip.Find(icon.entry_path);
-  if (entry == nullptr) return nullptr;
-  std::vector<uint8_t> bytes;
-  if (!zip.Read(*entry, apksx::kMaxIconRead, &bytes, &err)) return nullptr;
+  apksx::PackageIcon icon;
+  if (!apksx::ReadPackageIcon(zip, &icon, &err, &deadline)) return nullptr;
   apksx::DecodedImage image;
-  if (!image.DecodeFromMemory(bytes, 512, &err)) return nullptr;
+  if (!image.DecodeFromMemory(icon.bytes, 512, &err)) return nullptr;
   HBITMAP bitmap = nullptr;
   uint32_t cx = 0;
   uint32_t cy = 0;
@@ -128,7 +127,7 @@ HBITMAP LoadHeaderIcon(const std::wstring& path, int size) {
       }
     }
   }
-  return DecodeIconFromZip(path, size);
+  return DecodeIconFromPackage(path, size);
 }
 
 class PropPage;

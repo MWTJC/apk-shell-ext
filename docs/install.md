@@ -137,6 +137,31 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 - 若刚换过 DLL，资源管理器里还缓存着旧的——重启资源管理器；
 - 打开 `--diag on`，再开一次属性页，看 `apkthumb.log` 里有没有 worker 的记录。
 
+**反过来的情况：随便什么文件（比如 .txt）都有这一页？**
+这一页是按**扩展名**注册的，不是挂在"所有文件"（`*`）上——WinRAR 也只对压缩文件出现自己的页。
+任意文件都出现，说明注册表里有一条指向本程序的全域残留（调试版本或手工实验留下的），
+例如 `HKCU\Software\Classes\*\shellex\PropertySheetHandlers\<名字>` 的值是
+`{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B02}`。
+
+```bat
+"%LOCALAPPDATA%\Programs\apk-shell-ext\apkinfo.exe" --status
+:: 末段会写「全域注册：有（具体键）」或「无」
+```
+
+处置：把 `--status` 报出的那个键删掉，然后重启资源管理器：
+
+```bat
+reg delete "HKCU\Software\Classes\*\shellex\PropertySheetHandlers\ApkInfoTest" /f
+taskkill /f /im explorer.exe & start explorer.exe
+```
+
+（开发/便携场景用 `tools\register.ps1 -Install` 或 `-Uninstall` 注册时，它也会顺手清掉这类残留——
+只删值等于本程序 CLSID 的子键，别人的 handler 不动。）
+
+**`.xapk` / `.hap` 的属性页头部没有应用图标？**
+1.0.1 已修（页头图标与缩略图走同一条解析路径）。旧版只看得到 `.apk` 的图标，
+因为读图标的退路只认外层 ZIP 根上的 `AndroidManifest.xml`。升级即可，见 §1b。
+
 **我已经装了别的 APK 图标/缩略图工具，会不会冲突？**
 不会硬抢：安装时如果探测到 `.apk` 等扩展名上已经有别人的缩略图 handler 或 `DefaultIcon`，
 安装器会分别问一次，默认按钮是"否（保持原样）"，选"否"就一个值都不写；

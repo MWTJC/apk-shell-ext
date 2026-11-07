@@ -4,11 +4,11 @@
 
 #define APKSX_VERSION_MAJOR 1
 #define APKSX_VERSION_MINOR 0
-#define APKSX_VERSION_PATCH 0
+#define APKSX_VERSION_PATCH 1
 #define APKSX_VERSION_BUILD 0
 
-#define APKSX_VERSION_STRING "1.0.0"
-#define APKSX_VERSION_FULL "1.0.0.0"
+#define APKSX_VERSION_STRING "1.0.1"
+#define APKSX_VERSION_FULL "1.0.1.0"
 
 // 安装器在 HKCU\Software\apk-shell-ext 里记的"安装版本"，升级检测用
 #define APKSX_PRODUCT_NAME "apk-shell-ext"
