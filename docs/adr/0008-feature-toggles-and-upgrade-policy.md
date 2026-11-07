@@ -76,6 +76,15 @@ COM 类注册（两个 `CLSID\…\InprocServer32`）**不设开关**：没有 ha
 3. **不做**降级提示/拦截（用户 2026-11-04 明确不要：安装器保持无感）。
 4. 版本号仍手写在 `.iss`（`AppVersion`）；与 `src/version.h` 的同源化留作待办，不进本次范围。
 
+## 修订（2026-11-07）：§4 第 2 条被 ADR-0009 取代
+
+`CloseApplications=force` 在实测里暴露了两个问题：关一次 Explorer 要等 **0.4–30 s 且不可预测**，
+这段时间向导没有任何进度（`RmShutdown` 阻塞在 UI 线程，进度条只跟文件字节走）；而 `RestartApplications=no`
+时 Inno 不负责把 Explorer 拉回来，实测有一次 60 s 都没回来。
+
+升级期不再关闭任何应用，改成"给被加载的二进制改名让位再写新文件"，见
+[ADR-0009](0009-rename-in-place-upgrade.md)。本节其余三条（就地追加卸载日志、不拦降级、版本号手写）不变。
+
 ## 后果
 
 **正面**

@@ -122,7 +122,7 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
 | M3（2026-11-04） | `apkprop.dll` 单页（原生控件 + 可折叠分组）、`AddPages` 零 IO → Job 内 worker → `WM_APP` 回填 | 7.9 MB 包 140–188 ms 出全页；1.79 GB 包 157 ms |
 | M4（2026-11-04） | `.xapk/.apks/.apkm`（Stored base 走零拷贝窗口）+ 鸿蒙 `.hap` | 1.25 GB 的 PUBG 只读 107 MB；HAP 2/2 |
 | M5（2026-11-04） | Inno Setup 安装器（默认按用户、零 UAC）、三枚格式图标、VERSIONINFO、中英双语、命令并入 `apkinfo.exe` | 装/卸快照 diff 为 0；属性页中英各一张 |
-| 收口后 | 图标 v2、功能开关（`thumb`/`icon`）、撞车询问、`CloseApplications=force`、控制面板图标/发布者 | R-0015 / R-0016 / R-0017 |
+| 收口后 | 图标 v2、功能开关（`thumb`/`icon`）、撞车询问、控制面板图标/发布者 | R-0015 / R-0016 / R-0017 |
 
 **两个值得记住的意外**：
 
@@ -174,8 +174,13 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
   ② `*\shellex\PropertySheetHandlers` 上的调试残留会让**每个文件**都多出一页——`register.ps1` 安装/卸载
   都会清（只删值等于我们自己 CLSID 的键），`verify-install.ps1 -Phase check` 会断言它不存在，
   `apkinfo --status` 会打印「全域注册：有/无」。
-  产物已在 `out\dist\apk-shell-ext-setup-1.0.1.exe`；**真实覆盖安装与发版还没做**，步骤见
-  [release.md](release.md)（本机 1.0.0 是整机安装，需要一次 UAC）。
+- **1.0.2（[R-0020](verification.md) / [ADR-0009](adr/0009-rename-in-place-upgrade.md)）升级不再关闭 Explorer**：
+  `.iss` 改成 `CloseApplications=no`，`[Code]` 在 `ssInstall` 把被加载的二进制改名成 `*.old` 让位，
+  `ssPostInstall` 清理、`DeinitializeSetup` 失败回滚。实测替换 157 ms、explorer PID 不变。
+  **改这块先读 ADR-0009**：新增的 `.old` 文件是预期产物（卸载/下次安装清），别当成残留。
+  注意安装包里的 `docs/install.md` 是**打包时**的快照，改完文档要重新 `pack.cmd` 才会进安装包。
+  1.0.1 已发布（tag `v1.0.1` + release）；1.0.2 已在本机整机安装并复核（`verify-install check installed`），
+  产物 `out\dist\apk-shell-ext-setup-1.0.2.exe`，**尚未打 tag / 发版**。
 
 ## 10. 变更纪律
 

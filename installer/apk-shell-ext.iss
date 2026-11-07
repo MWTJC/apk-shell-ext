@@ -14,7 +14,7 @@
 ; 卸：  <install dir>\unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 
 #define AppName "apk-shell-ext"
-#define AppVersion "1.0.1"
+#define AppVersion "1.0.2"
 #define AppPublisher "MWTJC"
 #define AppId "{{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B03}"
 
@@ -40,11 +40,13 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 
-; 换 DLL 时 Explorer / dllhost 可能正拿着旧文件：交给 Inno 走 Restart Manager。
-; 必须是 force：缩略图一取过，apkthumb.dll 就被 COM Surrogate（dllhost.exe）占着，
-; RestartManager 关不掉它 → 默认 yes 时静默升级会以"某些应用程序无法关闭"收场（退出码 5，实测）。
-; 被强关的只有 explorer / dllhost 这两个宿主进程，都是随取随起、不承载用户数据。
-CloseApplications=force
+; 换 DLL 时 Explorer / dllhost 可能正拿着旧文件。这里**不关闭任何程序**：
+; Windows 允许给"已加载的 DLL"改名（进程继续用旧映像，新进程用新文件），
+; 所以 [Code] 在 ssInstall 阶段先把被占用的文件改名成 *.old，让 [Files] 正常写入新文件。
+; 为什么不用 Inno 的 CloseApplications：它会用 Restart Manager 在 UI 线程关掉 Explorer，
+; 实测同一台机器上这一关 0.4–30 s 不等，期间向导没有任何进度；而且 RestartApplications=no 时
+; Inno 不负责把 Explorer 拉回来（实测有一次 60 s 都没回来）。改名的代价只是"已打开的窗口继续用旧代码"。
+CloseApplications=no
 RestartApplications=no
 RestartIfNeededByRun=no
 
@@ -71,9 +73,12 @@ Name: "thumb"; Description: "Thumbnails for .apk/.xapk/.apks/.apkm/.hap in Large
 Name: "icon";  Description: "Replace the generic file icon in Small / List / Details views"; GroupDescription: "Explorer integration:"
 
 [Files]
-Source: "..\out\x64\apkthumb.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace
-Source: "..\out\x64\apkprop.dll";  DestDir: "{app}"; Flags: ignoreversion restartreplace
-Source: "..\out\x64\apkinfo.exe";  DestDir: "{app}"; Flags: ignoreversion restartreplace
+; restartreplace 只在"改名也没成功"时兜底（它需要管理员，按用户安装时无效）；
+; 正常路径由 [Code] 的 MoveAsideForReplace 把旧文件改名让路，不关任何程序。
+; uninsrestartdelete：卸载时 DLL 若正被 Explorer 拿着，就排队到重启删除，而不是报错卡住。
+Source: "..\out\x64\apkthumb.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
+Source: "..\out\x64\apkprop.dll";  DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
+Source: "..\out\x64\apkinfo.exe";  DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
 Source: "..\icons\*.ico";          DestDir: "{app}\icons"; Flags: ignoreversion
 Source: "..\docs\install.md";      DestDir: "{app}"; Flags: ignoreversion
 
@@ -159,6 +164,10 @@ Filename: "{app}\apkinfo.exe"; Parameters: "--features all=off"; Flags: runhidde
 ; 自建缩略图缓存与诊断日志：纯派生数据，删掉不丢任何用户内容
 Type: filesandordirs; Name: "{localappdata}\apk-shell-ext\thumbs"
 Type: files; Name: "{localappdata}\apk-shell-ext\apkthumb.log"
+; 升级时给"被占用、来不及删"的旧二进制留的副本（.*.old / .old1 …）
+Type: files; Name: "{app}\apkthumb.dll.old*"
+Type: files; Name: "{app}\apkprop.dll.old*"
+Type: files; Name: "{app}\apkinfo.exe.old*"
 
 [Code]
 // ---- 功能开关 + "撞车探测"（ADR-0008）-----------------------------------------------
@@ -173,6 +182,51 @@ var
   TakeOverThumb, TakeOverIcon: Boolean;
   ConflictsAsked: Boolean;
   Exts: array[0..4] of String;
+  // 升级换文件时"改名让路"的记录：Live[i] 被改成了 Aside[i]（见 MoveAsideForReplace）
+  MovedLive, MovedAside: TStringList;
+  ReplacedInPlace: Boolean;
+
+// Windows 允许重命名一个**已被进程加载**的 DLL：旧进程继续用旧映像，新进程用新文件。
+// 所以升级根本不需要关闭 Explorer：把旧文件改名让路，[Files] 就能顺利写入新的同名文件。
+// 这也解释了为什么不用 Inno 的 CloseApplications（它会用 Restart Manager 关掉 shell，
+// 耗时 0.4–30 s 不可预测、期间没有进度，而且我们还得自己把它拉回来）。
+procedure MoveAsideForReplace(const Dir, Name: String);
+var
+  Live, Aside: String;
+  Suffix: Integer;
+begin
+  Live := AddBackslash(Dir) + Name;
+  if not FileExists(Live) then
+    Exit;  { 首次安装，或已被上一次升级清掉 }
+  Aside := Live + '.old';
+  Suffix := 1;
+  while FileExists(Aside) do begin
+    Aside := Live + '.old' + IntToStr(Suffix);
+    Inc(Suffix);
+  end;
+  if RenameFile(Live, Aside) then begin
+    MovedLive.Add(Live);
+    MovedAside.Add(Aside);
+    ReplacedInPlace := True;
+    Log('replace: renamed ' + Name + ' out of the way (still loaded by Explorer or dllhost)');
+  end else
+    Log('replace: could not rename ' + Name + '; Setup will overwrite it (may need a restart)');
+end;
+
+// 新文件写好后，旧副本通常已经没人拿着了（宿主进程退出即解锁）；删不掉就留给下次安装。
+procedure CleanupMovedAside;
+var
+  I: Integer;
+begin
+  for I := 0 to MovedAside.Count - 1 do begin
+    if FileExists(MovedAside[I]) then begin
+      if DeleteFile(MovedAside[I]) then
+        Log('replace: removed ' + ExtractFileName(MovedAside[I]))
+      else
+        Log('replace: ' + ExtractFileName(MovedAside[I]) + ' still in use; next install will retry');
+    end;
+  end;
+end;
 
 function OurThumbClsid: String;
 begin
@@ -341,6 +395,9 @@ begin
   Exts[4] := 'hap';
   TakeOverThumb := True;
   TakeOverIcon := True;
+  MovedLive := TStringList.Create;
+  MovedAside := TStringList.Create;
+  ReplacedInPlace := False;
   Result := True;
 end;
 
@@ -348,11 +405,38 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   state: String;
 begin
-  if CurStep = ssInstall then
-    AskAboutConflicts
-  else if CurStep = ssPostInstall then begin
+  if CurStep = ssInstall then begin
+    AskAboutConflicts;
+    // 先给被 Explorer / dllhost 拿着的旧二进制改名让路，[Files] 才能无条件覆盖。
+    MoveAsideForReplace(ExpandConstant('{app}'), 'apkthumb.dll');
+    MoveAsideForReplace(ExpandConstant('{app}'), 'apkprop.dll');
+    MoveAsideForReplace(ExpandConstant('{app}'), 'apkinfo.exe');
+  end else if CurStep = ssPostInstall then begin
+    CleanupMovedAside;
     state := 'thumb=' + IntToStr(Ord(AllowThumb)) + ' icon=' + IntToStr(Ord(AllowIcon));
     Log('apk-shell-ext: install done (' + state + '); property page + DefaultIcon/handler ' +
         'registration for apk/xapk/apks/apkm/hap');
   end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and ReplacedInPlace then
+    WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      'Files that Explorer had loaded were replaced in place, so no window had to be closed. ' +
+      'The new version takes effect the next time Explorer starts.';
+end;
+
+procedure DeinitializeSetup;
+var
+  I: Integer;
+begin
+  // 中途失败或被取消时新文件可能没写成：把改名让路的旧文件放回去，别留一个坏掉的安装目录。
+  if MovedAside <> nil then
+    for I := 0 to MovedAside.Count - 1 do begin
+      if (not FileExists(MovedLive[I])) and FileExists(MovedAside[I]) then begin
+        if RenameFile(MovedAside[I], MovedLive[I]) then
+          Log('replace: restored ' + ExtractFileName(MovedLive[I]));
+      end;
+    end;
 end;

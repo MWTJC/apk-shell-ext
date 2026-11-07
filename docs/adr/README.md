@@ -12,7 +12,8 @@
 | [0005](0005-isolated-thumbnail-host-and-stream-input.md) | 缩略图在 dllhost 隔离宿主里跑、输入是 IStream；解析核心改为 ByteSource，流模式缓存键含中央目录摘要 | 已采纳（M1 实测得出） | M1 |
 | [0006](0006-format-scope-cut.md) | 格式范围收敛：只支持 `.apk/.xapk/.apks/.apkm/.hap`，**不做** `.aab/.ipa/.appx/.msix` | 已采纳（2026-11-04） | M4 |
 | [0007](0007-inno-setup-per-user-install.md) | 安装/分发用 Inno Setup 6；默认按用户装（零 UAC），`/ALLUSERS` 才一次 UAC；注册表根用 `HKA`；装好之后的命令并入 `apkinfo.exe` | 已采纳（2026-11-04） | M5 |
-| [0008](0008-feature-toggles-and-upgrade-policy.md) | 缩略图/静态图标各有开关（安装期 `[Tasks]` + 运行期 `--features`），属性页恒开；安装期探测别人的 handler 并询问，默认保持原样、不写不撤；升级就地追加卸载日志，不拦降级 | 已采纳（2026-11-04） | M5 之后 |
+| [0008](0008-feature-toggles-and-upgrade-policy.md) | 缩略图/静态图标各有开关（安装期 `[Tasks]` + 运行期 `--features`），属性页恒开；安装期探测别人的 handler 并询问，默认保持原样、不写不撤；升级就地追加卸载日志，不拦降级 | 已采纳（2026-11-04；§4 第 2 条"升级关应用"被 [0009](0009-rename-in-place-upgrade.md) 取代） | M5 之后 |
+| [0009](0009-rename-in-place-upgrade.md) | 升级**不关闭** Explorer / dllhost：把被加载的二进制改名成 `*.old` 让位，再写新文件；生效时间推迟到资源管理器下次启动 | 已采纳（2026-11-07，1.0.2） | M5 之后 |
 
 ## 写作规则
 

@@ -1617,3 +1617,99 @@ HAP 走 `module.json`），**同一件事在两个地方各写了一遍**，症�
 3. 页头图标现在与缩略图共用 resolver，代价是 `.xapk` 的 deflate base 会整块解压（上限 512 MB，与缩略图一致）；
    本轮两个样本的 base 都是 Stored，没测到 deflate 容器在 1.5 s 预算内解不出来的情况——那时页头会像坏包一样无图标，
    不会拖住页面（解析在 worker 线程，预算 1500 ms）。
+
+## 28. R-0020 记录（升级不再关闭 Explorer：改名替换，2026-11-07 / 1.0.2）
+
+### 现象（用户报告）
+
+用 1.0.1 覆盖 1.0.0 时，安装器提示"将关闭 explorer.exe"；关掉之后**约 10 秒没有任何进度**，
+之后资源管理器自己回来，安装器才跳到完成页。
+
+### 测量（先量，再定方案）
+
+同一台机器，用 Inno 内部同样的调用序列（`RmStartSession → RmRegisterResources → RmShutdown(RmForceShutdown)`）：
+
+| 场景 | `RmShutdown(force)` | 资源管理器 |
+| --- | --- | --- |
+| 2 个 explorer 进程 | **30,502 ms** | 8 ms 后还在（另一个进程未登记） |
+| 1 个 explorer 进程 | **377 ms** | **60 s 内未回来**，手工 `Start-Process explorer` |
+
+Inno 源码（`issrc` 浅克隆，`Projects/Src/`）：
+
+- `ShutdownApplications` 在 **UI 线程**调 `RmShutdown`；向导这期间停在 Installing 页，进度条只跟文件字节走 → 无进度可显示。
+- 只有 `RestartApplications` 为 yes 才调 `RmRestart`（`Setup.MainForm.pas:236`）→ 我们设 no，等于"关了不负责拉回来"。
+- 失败重试是 `PerformFileOperationWithRetries(4, …)` + `Sleep(1000)`；`restartreplace` 分支带 `and IsAdmin`。
+
+### 可行性验证（改名替换的基本盘）
+
+用真实 `apkprop.dll` 做 holder 进程（`LoadLibrary` 常驻），复刻"文件被加载"：
+
+| 操作 | 结果 |
+| --- | --- |
+| `DeleteFile(apkprop.dll)` | 失败（文件被占用） |
+| `RenameFile(apkprop.dll → .old-1.0.1)` | **成功** |
+| 在原路径写新 `apkprop.dll` | 成功（453,120 → 453,135 B，hash 变化） |
+| holder 进程 | 存活，模块仍映射（旧映像继续用） |
+| 新进程加载同名文件 | `LoadLibrary` 成功、`DllGetClassObject`/`DllCanUnloadNow` 导出都在 |
+| 宿主存活期间删 `.old` | 失败 |
+| 宿主退出后删 `.old` | 成功 |
+
+### 端到端（真实安装器，按用户路径，不需要管理员）
+
+在 `%TEMP%\apksx-e2e` 先装好 1.0.2，再把旧版（1.0.1）的三个二进制覆盖回去模拟"旧版本在位"，
+用 holder 占住 `apkprop.dll`，然后跑 1.0.2 安装包：
+
+```
+21:22:10.609  replace: renamed apkthumb.dll out of the way (still loaded by Explorer or dllhost)
+21:22:10.609  replace: renamed apkprop.dll out of the way (still loaded by Explorer or dllhost)
+21:22:10.610  replace: renamed apkinfo.exe out of the way (still loaded by Explorer or dllhost)
+21:22:10.765  replace: removed apkthumb.dll.old
+21:22:10.766  replace: apkprop.dll.old still in use; next install will retry
+21:22:10.766  replace: removed apkinfo.exe.old
+```
+
+| 断言 | 结果 |
+| --- | --- |
+| 资源管理器进程 | 升级前后都是 PID 30772 —— **没有被关闭** |
+| 文件替换耗时 | 157 ms（rename 三条 → 新文件落地 → 清理），对比原来的 0.4–30 s |
+| 新文件 | `apkprop.dll`=9bcb2aca…、`apkthumb.dll`=8f280020…，与 `out\x64` 一致 |
+| 被占用的旧副本 | `apkprop.dll.old` 留着（下次安装/卸载清）；holder 退出后手工删除成功 |
+| 未被占用的旧副本 | `apkthumb.dll.old`、`apkinfo.exe.old` 当场删除 |
+
+### 事故与恢复（必须记下来）
+
+第一次做 E2E 时，我用 `/VERYSILENT /DIR=<临时目录>` 跑安装包；Inno 把它当成**已有整机安装的升级**，
+把 `HKCU/HKLM` 两处都改了——实际写进的是 **HKLM**，并且覆盖了"应用和列表"里那条卸载记录，
+`InstallLocation` 指向临时目录。随后我运行临时目录里的 `unins000.exe` 卸载，它把 HKLM 的类注册与卸载条目一起删了，
+于是 `C:\Program Files\apk-shell-ext` 里的 1.0.1 文件还在、注册却没了（产品短暂不可用）。
+
+恢复：用 `Start-Process -Verb RunAs` 提权跑 1.0.2 安装包（一次 UAC，`/ALLUSERS /VERYSILENT`），
+它会重建卸载条目 + 把所有注册指回 Program Files + 把文件升到 1.0.2。复核：
+
+| 断言 | 结果 |
+| --- | --- |
+| 二进制 | Program Files 下三个文件 hash 与 `out\x64` 一致（9bcb2aca… / 8f280020…） |
+| 注册 | `HKLM\…\CLSID\{…7B02}\InprocServer32` = `C:\Program Files\apk-shell-ext\apkprop.dll` |
+| 应用列表 | `DisplayVersion=1.0.2`、`InstallLocation=C:\Program Files\apk-shell-ext\` |
+| 旧副本 | Program Files 下没有 `*.old` 残留 |
+| 安装验收 | `verify-install.ps1 -Phase check -State installed -Scope machine` → `[check] installed : ok` |
+| 资源管理器 | 升级前后仍是 PID 30772 |
+
+### 变更
+
+| 文件 | 改动 |
+| --- | --- |
+| `installer/apk-shell-ext.iss` | `CloseApplications=no`；`[Code]` 新增 `MoveAsideForReplace` / `CleanupMovedAside` / `DeinitializeSetup` 回滚 / 完成页提示；`[Files]` 三个二进制加 `uninsrestartdelete`；`[UninstallDelete]` 清 `*.old*` |
+| `docs/adr/0009-rename-in-place-upgrade.md` | 新 ADR；ADR-0008 §4 第 2 条标记为被取代 |
+| `docs/install.md` | §1b 改写（不再关程序、生效时机）；FAQ 增两条 |
+| `src/version.h` | 1.0.1 → 1.0.2 |
+
+### 未验证 / 注意
+
+1. **"Explorer 真的持有 DLL 时升级"是用 holder 进程模拟的**：语义相同（模块映射 + 文件锁），但没有在整机安装上
+   让真实 explorer 持有旧 `apkprop.dll` 再跑一次覆盖安装。做这件事的代价是先把属性页开着再升级。
+2. 卸载时 DLL 正被占用（新增的 `uninsrestartdelete`）**没有实测**：预期是"排队到重启删除 + 提示重启"，
+   而 `uninsrestartdelete` 同样要求管理员。
+3. 完成页那句"Files that Explorer had loaded were replaced in place…"只验证了逻辑与编译，**没截图**；
+   它只在真的发生改名时出现（本轮 E2E 是静默安装，看不到）。
+4. 本条只在按用户安装（临时目录）上跑过端到端；整机安装用的是同一条代码路径，但只做了"装完复核"。
