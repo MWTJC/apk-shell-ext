@@ -14,7 +14,7 @@
 ; 卸：  <install dir>\unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 
 #define AppName "apk-shell-ext"
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.3"
 #define AppPublisher "MWTJC"
 #define AppId "{{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B03}"
 
