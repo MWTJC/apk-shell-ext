@@ -116,3 +116,7 @@
   现在下载后 `sha256sum -c` 两个包都 `OK`。
 - **仍未做**：Arm64 上的壳集成验收（属性页 UI、真实 Explorer 缩略图管线、ProcMon 零读取）——runner 无交互桌面，
   必须真机；`windows-11-arm` 的 public preview 属性也意味着这条腿随时可能排队变长或镜像变动。
+- 发版链路上另外两处 Windows 语义坑（v1.0.3 首跑踩到，`[实测]`）：
+  ① `gh release create` 会把文件参数当 glob 展开（反斜杠与正斜杠相对路径都会报 `no matches found`）
+  → 改用 `softprops/action-gh-release`；
+  ② `upload-artifact` 保留相对路径（`out/dist/*` 在下载侧变成 `dist/out/dist/*`）→ package job 先摊平复制到 `release/`。

@@ -1746,3 +1746,30 @@ Inno 源码（`issrc` 浅克隆，`Projects/Src/`）：
 3. `windows-latest` 没有 WIC WebP 编解码器 → **装了 WebP 图像扩展之前**，图标是 WebP 的包没有缩略图（优雅退回默认图标）；
    已在 `docs/install.md` FAQ 里写明。
 4. `windows-11-arm` 仍是 public preview（仅 public 仓），镜像内容与可用性会变；`Toolchain inventory` 步骤负责留证据。
+
+## 30. R-0022 记录（1.0.3 发版：CI 出包 + tag 驱动 Release，2026-11-08）
+
+### 结论
+
+| 判据 | 实测 |
+| --- | --- |
+| tag 触发全流程 | `git push` 一个 `v1.0.3` tag → run `#42485690147`：build(x64) 57s、build(arm64) 2m8s、package 21s、release 10s，**四段全绿** |
+| Release 资产 | `https://github.com/MWTJC/apk-shell-ext/releases/tag/v1.0.3`：`apk-shell-ext-setup-1.0.3-arm64.exe`（2,385,151 B）、`…-x64.exe`（2,418,365 B）、`SHA256SUMS.txt`（202 B） |
+| 用户视角校验 | `gh release download v1.0.3` 后 `sha256sum -c SHA256SUMS.txt` → 两个包全 `OK`（校验和文件是 LF，Linux/macOS 可直读） |
+| 架构守卫（发布产物） | 下载的 arm64 包在本机（x64）`/VERYSILENT` → `exit 1`，`C:\Program Files\apk-shell-ext` 9 个文件 md5 不变 |
+| 版本号一致性 | 两个架构二进制的 VERSIONINFO 均为 `1.0.3.0`；安装器 `AppVersion` 由 `sync-version.ps1` 从 `src/version.h` 同步 |
+
+### 过程中修掉的两个 CI 缺陷（`[实测]`，都是 Windows/artifact 语义问题）
+
+1. **`gh release create` 在 Windows 上把文件参数当 glob 展开**：`no matches found for 'D'`（反斜杠路径）
+   → 改成 `dist/xxx` 也不行（`no matches found for 'd'`）。最终改用 `softprops/action-gh-release@v3`。
+2. **`upload-artifact` 保留相对路径**：直接传 `out/dist/*.exe` 下载侧变成 `dist/out/dist/*.exe`，
+   release 步骤拿不到文件。改为 package job 先摊平复制到 `release/` 再上传。
+
+### 未验证 / 注意
+
+1. **Arm64 上的壳集成本身仍未验收**（用户目前没有 Arm64 设备，明确接受"等反馈再说"）：
+   CI 只证明 Arm64 二进制能编、能跑、能解码、模型自测通过；属性页在 Arm64 资源管理器中的实际呈现、
+   真实 Explorer 缩略图管线、ProcMon 零读取都还欠一次真机。
+2. x64 侧 1.0.3 与 1.0.2 的功能等价（本版只有构建/打包/CI 变化），因此没有重跑装/卸全链路；
+   本机 `C:\Program Files\apk-shell-ext` 里仍是 1.0.2 的二进制。

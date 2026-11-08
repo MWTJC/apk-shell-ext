@@ -1,7 +1,35 @@
-# 发布流程（手工，无 CI）
+# 发布流程（tag 驱动，CI 执行）
 
-> 本项目目前不使用 GitHub Actions，发布由人工在本地完成，产物手动上传到 Release。
-> 为何：等有人看得上这玩意儿了再说（碎碎念）。
+> 正常发版：改版本号 → 提交 → `git tag` → `git push` tag，CI 自动编译两个架构、出两个安装包、建 Release。
+> 下文 §1/§2 是**本地预检与兜底**（CI 不可用时手工发版用）。CI 形态见 [ADR-0011](adr/0011-ci-on-windows-runners.md)。
+
+## 0b. 发版（现在的方式）
+
+```bat
+:: 1) 只改 src/version.h（MAJOR/MINOR/PATCH/BUILD + STRING/FULL 自洽）
+powershell -ExecutionPolicy Bypass -File tools\sync-version.ps1        :: 写进 .iss
+powershell -ExecutionPolicy Bypass -File tools\sync-version.ps1 -Check  :: 确认无漂移
+
+:: 2) 本地预检（可选但推荐）：两个架构编一次、出两个包
+tools\build.cmd Release --clean
+tools\build.cmd Release arm64
+tools\pack.cmd x64
+tools\pack.cmd arm64
+
+:: 3) 提交 + 打 tag + 推 tag（tag 就是发版按钮）
+git add -A && git commit -m "版本 <ver>"
+git push origin main
+git tag -a v<ver> -m "v<ver>"
+git push origin v<ver>
+```
+
+CI 之后会：`build (x64)` + `build (arm64)` → `package`（两个安装包 + `SHA256SUMS.txt`）→
+`release`（`softprops/action-gh-release` 建 Release，带 `--generate-notes` 自动生成说明）。
+
+验收一句话：`gh release download v<ver>` 后 `sha256sum -c SHA256SUMS.txt` 两个包都 `OK`，
+且 `release` 里恰好三个资产（两个 exe + 校验和）。
+
+**手工兜底**：CI 不可用时按 §1 → §2 走原流程（本地产包、手工上传）。
 
 ## 0. 版本号只有一个来源
 
@@ -31,7 +59,7 @@ powershell -ExecutionPolicy Bypass -File tools\sync-version.ps1 -Check   :: 只�
 powershell -ExecutionPolicy Bypass -File tools\sync-version.ps1          :: 同步（pack.cmd 会自动做）
 ```
 
-## 1. 发版检查单
+## 1. 发版检查单（本地预检 / 手工兜底）
 
 1. **改版本号**：`src/version.h`（三个数字 + `STRING` / `FULL` 一起改）。
 2. **构建（两个架构）**：`tools\build.cmd Release --clean`，再 `tools\build.cmd Release arm64`；
@@ -63,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File tools\sync-version.ps1          :: 同�
 8. **提交**：`git add -A && git commit`，然后打 tag：`git tag -a v1.0.0 -m "v1.0.0" && git push --tags`。
 9. **发 Release**（下面两种方式，任选）。
 
-## 2. 上传 Release
+## 2. 上传 Release（手工兜底；正常发版由 CI 完成）
 
 先算校验和（写进 Release 说明）：
 

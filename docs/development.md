@@ -185,9 +185,10 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
   `ssPostInstall` 清理、`DeinitializeSetup` 失败回滚。实测替换 157 ms、explorer PID 不变。
   **改这块先读 ADR-0009**：新增的 `.old` 文件是预期产物（卸载/下次安装清），别当成残留。
   注意安装包里的 `docs/install.md` 是**打包时**的快照，改完文档要重新 `pack.cmd` 才会进安装包。
-  1.0.1 已发布（tag `v1.0.1` + release）；1.0.2 已在本机整机安装并复核（`verify-install check installed`），
-  产物 `out\dist\apk-shell-ext-setup-1.0.2-{x64,arm64}.exe`（按架构分包，见 [ADR-0010](adr/0010-arch-specific-builds-and-installers.md)），
-  **尚未打 tag / 发版**；Arm64 包目前的验证程度是"能编出来 + 在本机 x64 上被架构守卫拒绝"，**运行期未验收**。
+  **1.0.3 已由 CI 发版**（tag `v1.0.3` → run `#42485690147` 四段全绿，Release 里两个安装包 + `SHA256SUMS.txt`，
+  见 [R-0022](verification.md)）。1.0.2 只有本机安装记录，未发版。
+  Arm64 包的验证程度是"CI 原生 Arm64 上编译 + 自测 + 缩略图解出 + 在本机 x64 上被架构守卫拒绝"，
+  **壳集成（属性页 / 真实 Explorer 管线）仍未在 Arm64 实机验收**——用户目前没有 Arm64 设备，已明确接受"等反馈再说"。
 
 ## 10. 变更纪律
 
