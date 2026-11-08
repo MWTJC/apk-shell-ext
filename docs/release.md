@@ -22,7 +22,7 @@
 | --- | --- |
 | 三个二进制的 VERSIONINFO | 编译时从 `version.h` 取（`src/*/*.rc`） |
 | 安装器 `AppVersion` / `DisplayVersion` | `tools\sync-version.ps1` 写进 `installer\apk-shell-ext.iss` |
-| 安装包文件名 | `.iss` 的 `OutputBaseFilename=apk-shell-ext-setup-{#AppVersion}` |
+| 安装包文件名 | `.iss` 的 `OutputBaseFilename=apk-shell-ext-setup-{#AppVersion}-{#ArchName}`（按架构分包，见 [ADR-0010](adr/0010-arch-specific-builds-and-installers.md)） |
 
 改版本就只改 `version.h` 一处，然后：
 
@@ -34,9 +34,12 @@ powershell -ExecutionPolicy Bypass -File tools\sync-version.ps1          :: 同�
 ## 1. 发版检查单
 
 1. **改版本号**：`src/version.h`（三个数字 + `STRING` / `FULL` 一起改）。
-2. **构建**：`tools\build.cmd Release --clean`；确认没有警告（编译选项是 `/W4 /WX`，有警告就编不过）。
-3. **打包**：`tools\pack.cmd`（内部会先 `sync-version.ps1`）→ `out\dist\apk-shell-ext-setup-<ver>.exe`。
-4. **本机 smoke**（约 5 分钟）：
+2. **构建（两个架构）**：`tools\build.cmd Release --clean`，再 `tools\build.cmd Release arm64`；
+   确认没有警告（编译选项是 `/W4 /WX`，有警告就编不过）。产物分别是 `out\x64` 与 `out\arm64`，
+   PE 机器码应为 `0x8664` / `0xAA64`（`dumpbin /headers` 或 `link /dump /headers`）。
+3. **打包（两个架构）**：`tools\pack.cmd` 与 `tools\pack.cmd arm64`（内部都会先 `sync-version.ps1`）→
+   `out\dist\apk-shell-ext-setup-<ver>-x64.exe` / `…-arm64.exe`。
+4. **本机 smoke**（约 5 分钟，只能验本机架构那个包；另一个包至少要验"能启动 + 架构守卫拦不拦"）：
    - 装：双击或 `/VERYSILENT`；控制面板能看到条目、图标与发布者正常；
    - 大图标视图出缩略图；小图标视图是格式图标；右键属性出「安装包信息」且数字对得上 `aapt2 dump badging`；
    - `apkinfo --features` 显示 `thumb/icon/prop` 全开；`--features icon=off` 后图标回落到系统图标，再 `on` 恢复；
@@ -65,7 +68,7 @@ powershell -ExecutionPolicy Bypass -File tools\sync-version.ps1          :: 同�
 先算校验和（写进 Release 说明）：
 
 ```bat
-powershell -NoProfile -Command "Get-FileHash out\dist\apk-shell-ext-setup-1.0.0.exe -Algorithm SHA256 | Format-List"
+powershell -NoProfile -Command "Get-ChildItem out\dist\apk-shell-ext-setup-<ver>-*.exe | Get-FileHash -Algorithm SHA256 | Format-List"
 ```
 
 **方式 A：网页**——GitHub → Releases → *Draft a new release* → 选 tag → 标题 `v1.0.0` →
@@ -74,17 +77,17 @@ powershell -NoProfile -Command "Get-FileHash out\dist\apk-shell-ext-setup-1.0.0.
 **方式 B：gh CLI**
 
 ```bat
-gh release create v1.0.0 out\dist\apk-shell-ext-setup-1.0.0.exe ^
+gh release create v1.0.0 out\dist\apk-shell-ext-setup-1.0.0-x64.exe out\dist\apk-shell-ext-setup-1.0.0-arm64.exe ^
    --title "v1.0.0" --notes-file notes.md
 ```
 
-上传清单（**只传这一个文件**）：
+上传清单（**两个安装包，按架构各一个**）：
 
 | 传 | 不传 |
 | --- | --- |
-| `apk-shell-ext-setup-<ver>.exe` | `out\x64\*.dll/exe`（未打包的二进制） |
-| （可选）`SHA256SUMS.txt` | 测试夹具 `tests\fixtures\**` |
-| | 日志、`build\`、`out\` 里的其它东西 |
+| `apk-shell-ext-setup-<ver>-x64.exe` | `out\<arch>\*.dll/exe`（未打包的二进制） |
+| `apk-shell-ext-setup-<ver>-arm64.exe` | 测试夹具 `tests\fixtures\**` |
+| （可选）`SHA256SUMS.txt` | 日志、`build\`、`out\` 里的其余东西 |
 
 ## 3. Release notes 模板
 

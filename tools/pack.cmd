@@ -2,25 +2,42 @@
 rem Packaging entry: sync the installer's version from src\version.h, then wrap the binaries
 rem into one Inno Setup exe.
 rem
-rem Usage: tools\pack.cmd [--build]
-rem   --build   also run tools\build.cmd Release first
+rem Usage: tools\pack.cmd [x64^|arm64] [--build]
+rem   x64    (default) pack out\x64  -> apk-shell-ext-setup-<ver>-x64.exe
+rem   arm64  pack out\arm64 -> apk-shell-ext-setup-<ver>-arm64.exe
+rem   --build   also run tools\build.cmd Release <arch> first
 rem
 rem Notes:
+rem   * One installer per architecture (ADR-0010); the file name carries the arch.
 rem   * The version lives only in src\version.h; sync-version.ps1 copies it into the .iss
 rem     (run it with -Check to verify without writing).
 rem   * ISCC lookup: %ISCC% -> where ISCC.exe -> Program Files\(x86)\Inno Setup 6 -> this machine's path.
-rem   * Output: out\dist\apk-shell-ext-setup-<version>.exe (single file, LZMA2).
+rem   * Output: out\dist\apk-shell-ext-setup-<version>-<arch>.exe (LZMA2).
 rem Keep this file ASCII-only (cmd.exe reads it in the OEM code page).
 setlocal
 set ROOT=%~dp0..
+set ARCH=x64
+set DO_BUILD=0
 
-if /I "%1"=="--build" (
-  call "%ROOT%\tools\build.cmd" Release
+:parse
+if "%~1"=="" goto parsed
+if /I "%~1"=="x64" (set "ARCH=x64" & shift & goto parse)
+if /I "%~1"=="arm64" (set "ARCH=arm64" & shift & goto parse)
+if /I "%~1"=="--build" (set "DO_BUILD=1" & shift & goto parse)
+echo [pack] unknown argument: %~1 (expected x64/arm64, --build)
+exit /b 1
+:parsed
+
+set ISCC_DEFINE=
+if /I "%ARCH%"=="arm64" set ISCC_DEFINE=/DBUILD_ARM64
+
+if "%DO_BUILD%"=="1" (
+  call "%ROOT%\tools\build.cmd" Release %ARCH%
   if errorlevel 1 exit /b 1
 )
 
-if not exist "%ROOT%\out\x64\apkthumb.dll" (
-  echo [pack] out\x64 has no binaries - run tools\build.cmd Release first
+if not exist "%ROOT%\out\%ARCH%\apkthumb.dll" (
+  echo [pack] out\%ARCH% has no binaries - run tools\build.cmd Release %ARCH% first
   exit /b 1
 )
 if not exist "%ROOT%\icons\apk.ico" (
@@ -45,12 +62,12 @@ if "%ISCC%"=="" (
   exit /b 1
 )
 
-echo [pack] compiling installer\apk-shell-ext.iss
-"%ISCC%" /Q "%ROOT%\installer\apk-shell-ext.iss"
+echo [pack] compiling installer\apk-shell-ext.iss (arch=%ARCH%)
+"%ISCC%" /Q %ISCC_DEFINE% "%ROOT%\installer\apk-shell-ext.iss"
 if errorlevel 1 (
   echo [pack] ISCC failed
   exit /b 1
 )
 echo [pack] done:
-dir /b "%ROOT%\out\dist\*.exe"
+dir /b "%ROOT%\out\dist\apk-shell-ext-setup-*-%ARCH%.exe"
 exit /b 0

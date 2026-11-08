@@ -7,9 +7,12 @@
 ## 1. 安装（推荐：安装器，零 UAC）
 
 ```bat
-apk-shell-ext-setup-1.0.0.exe
+apk-shell-ext-setup-<ver>-<arch>.exe
 ```
 
+- **先选对架构**：`-x64` 给普通 Intel/AMD 机器，`-arm64` 给骁龙 X 一类的 Arm64 机器
+  （设置 → 系统 → 系统信息 → "系统类型" 可确认）。装错架构的包会被安装器直接拒绝，
+  不会装出一个"装上了但没反应"的半残状态。
 - 默认**只给当前用户装**：文件进 `%LOCALAPPDATA%\Programs\apk-shell-ext`，注册表写
   `HKCU\Software\Classes`，**不会弹 UAC**。
 - 想给整台机器装：安装器第一页勾"为所有用户安装"（或命令行 `/ALLUSERS`），
@@ -22,11 +25,11 @@ apk-shell-ext-setup-1.0.0.exe
 - 静默安装（脚本/批量）：
 
   ```bat
-  apk-shell-ext-setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-  apk-shell-ext-setup-1.0.0.exe /VERYSILENT /ALLUSERS      :: 整机，需要提权
-  apk-shell-ext-setup-1.0.0.exe /VERYSILENT /DIR="D:\Tools\apk-shell-ext"
-  apk-shell-ext-setup-1.0.0.exe /VERYSILENT /TASKS=""      :: 只装属性页，不接管缩略图/图标
-  apk-shell-ext-setup-1.0.0.exe /VERYSILENT /OVERWRITE=all :: 已有别的工具时也强行接管
+  apk-shell-ext-setup-<ver>-<arch>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+  apk-shell-ext-setup-<ver>-<arch>.exe /VERYSILENT /ALLUSERS      :: 整机，需要提权
+  apk-shell-ext-setup-<ver>-<arch>.exe /VERYSILENT /DIR="D:\Tools\apk-shell-ext"
+  apk-shell-ext-setup-<ver>-<arch>.exe /VERYSILENT /TASKS=""      :: 只装属性页，不接管缩略图/图标
+  apk-shell-ext-setup-<ver>-<arch>.exe /VERYSILENT /OVERWRITE=all :: 已有别的工具时也强行接管
   ```
 
   静默模式不会弹窗：遇到冲突**默认保持原样**，要接管必须显式 `OVERWRITE`（`thumb` / `icon` / `all`）。

@@ -14,6 +14,8 @@
 | [0007](0007-inno-setup-per-user-install.md) | 安装/分发用 Inno Setup 6；默认按用户装（零 UAC），`/ALLUSERS` 才一次 UAC；注册表根用 `HKA`；装好之后的命令并入 `apkinfo.exe` | 已采纳（2026-11-04） | M5 |
 | [0008](0008-feature-toggles-and-upgrade-policy.md) | 缩略图/静态图标各有开关（安装期 `[Tasks]` + 运行期 `--features`），属性页恒开；安装期探测别人的 handler 并询问，默认保持原样、不写不撤；升级就地追加卸载日志，不拦降级 | 已采纳（2026-11-04；§4 第 2 条"升级关应用"被 [0009](0009-rename-in-place-upgrade.md) 取代） | M5 之后 |
 | [0009](0009-rename-in-place-upgrade.md) | 升级**不关闭** Explorer / dllhost：把被加载的二进制改名成 `*.old` 让位，再写新文件；生效时间推迟到资源管理器下次启动 | 已采纳（2026-11-07，1.0.2） | M5 之后 |
+| [0010](0010-arch-specific-builds-and-installers.md) | 双架构构建（x64 / arm64，产物落 `out\<arch>`）+ **按架构分包**（文件名区分）+ 安装器架构守卫（x64 包 `x64os`，arm64 包 `arm64`）；不做 Arm64EC | 已采纳（2026-11-08） | M5 之后 |
+| [0011](0011-ci-on-windows-runners.md) | CI 只用原生 Windows runner（x64 腿 `windows-latest`、arm64 腿 `windows-11-arm`）；按架构出两个包；`workflow_dispatch` + tag 驱动发版，不做 PR 门禁；act 仅作本地自检 | 已采纳（2026-11-08） | M5 之后 |
 
 ## 写作规则
 

@@ -230,6 +230,11 @@ HKCR\.apk\DefaultIcon
   `installer\apk-shell-ext.iss` 里注册表根一律用 `HKA`（整机 = HKLM、按用户 = HKCU），
   `Subkey` 写 `Software\Classes\…`；**不要写 `HKCR`**，非管理员模式会直接写 HKLM
   失败（实测 `RegCreateKeyEx` 代码 5，整个安装回滚）。
+- **按架构分包（[ADR-0010](adr/0010-arch-specific-builds-and-installers.md)）**：同一份 `.iss` 编两次，
+  `out\dist\apk-shell-ext-setup-<ver>-x64.exe` 只允许真 x64 系统（`ArchitecturesAllowed=x64os`），
+  `…-arm64.exe` 只允许 Arm64（`ArchitecturesAllowed=arm64`）；payload 分别取 `out\x64` / `out\arm64`。
+  为什么 x64 包不用 `x64compatible`：Arm64 上的 explorer/dllhost 是原生 Arm64 进程，
+  x64 的进程内 COM 装上去也不会被加载——静默失效比"拒绝安装"更糟。
 - 卸载由 `unins000.exe` 按声明撤销（`uninsdeletevalue` / `uninsdeletekeyifempty`），外加
   `[UninstallDelete]` 清 `%LOCALAPPDATA%\apk-shell-ext\thumbs` 与日志；
   验收用 `tools\verify-install.ps1`（装后断言 + 卸后残留检查 + 快照 diff）。
@@ -256,7 +261,7 @@ HKCR\.apk\DefaultIcon
 | UI | `apkprop.dll` 用 WTL（对话框模板）；`apkinfo.exe` 无 UI |
 | CRT | `/MT`（静态）；DLL 侧禁止 `/MD` |
 | 警告 | `/W4 /WX`；`/guard:cf`、`/DYNAMICBASE`、`/NXCOMPAT` |
-| 产物 | `out\x64\{apkthumb.dll, apkprop.dll, apkinfo.exe}` |
+| 产物 | `out\<arch>\{apkthumb.dll, apkprop.dll, apkinfo.exe}`，`arch` = `x64` \| `arm64`（[ADR-0010](adr/0010-arch-specific-builds-and-installers.md)） |
 | 测试 | `tests\fixtures\` 自造最小包（APK/AAB/IPA/HAP/APPX 各 1–2 个，< 20 KB）；断言走 JSON |
 
 ## 6. 失败与安全

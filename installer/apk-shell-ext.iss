@@ -18,6 +18,21 @@
 #define AppPublisher "MWTJC"
 #define AppId "{{A7C4E1B0-5E8D-4C3A-9F2B-6D1C8E4A7B03}"
 
+; 按架构分包（ADR-0010）：同一个脚本编两次，靠 ISCC /DBUILD_ARM64 切换。
+;   x64 包  -> 只允许真 x64 系统（x64os，不含 Arm64 的 x64 模仿）
+;   arm64 包 -> 只允许 Arm64 系统
+; 为什么用 x64os 而不是 x64compatible：我们的 DLL 是进程内壳扩展，Arm64 上的 explorer/dllhost
+; 是原生 Arm64 进程，x64 DLL 装上去也不会生效（静默失效比"拒绝安装"更糟）。
+#ifdef BUILD_ARM64
+  #define ArchName "arm64"
+  #define ArchIdent "arm64"
+  #define PayloadDir "..\out\arm64"
+#else
+  #define ArchName "x64"
+  #define ArchIdent "x64os"
+  #define PayloadDir "..\out\x64"
+#endif
+
 [Setup]
 AppId={#AppId}
 AppName={#AppName}
@@ -36,8 +51,8 @@ PrivilegesRequiredOverridesAllowed=dialog commandline
 DefaultDirName={autopf}\apk-shell-ext
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#ArchIdent}
+ArchitecturesInstallIn64BitMode={#ArchIdent}
 MinVersion=10.0.17763
 
 ; 换 DLL 时 Explorer / dllhost 可能正拿着旧文件。这里**不关闭任何程序**：
@@ -57,7 +72,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 OutputDir=..\out\dist
-OutputBaseFilename=apk-shell-ext-setup-{#AppVersion}
+OutputBaseFilename=apk-shell-ext-setup-{#AppVersion}-{#ArchName}
 UninstallDisplayName={#AppName} (package icons + info page)
 ; 控制面板里的图标：必须给一个有 icon 资源的文件或 .ico。apkthumb.dll 里没有 ICON 资源，
 ; 指向它时 ExtractIconEx 返回 0 个图标 → 控制面板显示空白（实测）。
@@ -76,9 +91,9 @@ Name: "icon";  Description: "Replace the generic file icon in Small / List / Det
 ; restartreplace 只在"改名也没成功"时兜底（它需要管理员，按用户安装时无效）；
 ; 正常路径由 [Code] 的 MoveAsideForReplace 把旧文件改名让路，不关任何程序。
 ; uninsrestartdelete：卸载时 DLL 若正被 Explorer 拿着，就排队到重启删除，而不是报错卡住。
-Source: "..\out\x64\apkthumb.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
-Source: "..\out\x64\apkprop.dll";  DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
-Source: "..\out\x64\apkinfo.exe";  DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
+Source: "{#PayloadDir}\apkthumb.dll"; DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
+Source: "{#PayloadDir}\apkprop.dll";  DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
+Source: "{#PayloadDir}\apkinfo.exe";  DestDir: "{app}"; Flags: ignoreversion restartreplace uninsrestartdelete
 Source: "..\icons\*.ico";          DestDir: "{app}\icons"; Flags: ignoreversion
 Source: "..\docs\install.md";      DestDir: "{app}"; Flags: ignoreversion
 

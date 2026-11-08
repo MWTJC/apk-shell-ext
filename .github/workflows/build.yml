@@ -1,0 +1,176 @@
+name: build
+
+# 触发方式见 ADR-0011：只手动触发与打 tag 发版，不挂 PR 门禁。
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 只打印环境，不判失败：windows-11-arm 镜像内容会变，出问题时靠这段日志定位。
+      - name: Toolchain inventory
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          "OS: $([System.Environment]::OSVersion.VersionString)"
+          "PROCESSOR_ARCHITECTURE: $env:PROCESSOR_ARCHITECTURE"
+          "cmake: $((cmake --version | Select-Object -First 1))"
+          "ninja: $((ninja --version))"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (Test-Path $vswhere) {
+            "VS: $(& $vswhere -latest -products * -property installationVersion)"
+            "ARM64 tools: $(& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath)"
+          } else { "vswhere: not found" }
+
+      # 版本号漂移即红：.iss 的 AppVersion 必须等于 src/version.h（pack.cmd 会写，但仓库里要保持一致）
+      - name: Version drift check
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-version.ps1 -Check
+
+      - name: Build
+        shell: cmd
+        run: tools\build.cmd Release ${{ matrix.arch }}
+
+      # 机器码断言：CI 存在的意义之一就是防止"ARM64 构建悄悄产出 x64"这类错误
+      - name: Assert PE machine type
+        shell: pwsh
+        run: |
+          $want = @{ x64 = 0x8664; arm64 = 0xAA64 }['${{ matrix.arch }}']
+          if (-not $want) { throw "unknown arch" }
+          foreach ($f in 'apkthumb.dll','apkprop.dll','apkinfo.exe') {
+            $p = "out/${{ matrix.arch }}/$f"
+            if (-not (Test-Path $p)) { throw "missing $p" }
+            $fs = [IO.File]::OpenRead($p)
+            $br = New-Object IO.BinaryReader($fs)
+            $fs.Position = 0x3C; $pe = $br.ReadInt32()
+            $fs.Position = $pe + 4; $machine = $br.ReadUInt16()
+            $br.Close(); $fs.Close()
+            if ($machine -ne $want) { throw ("{0} machine=0x{1:X4}, expected 0x{2:X4}" -f $f, $machine, $want) }
+            "ok {0} machine=0x{1:X4}" -f $f, $machine
+          }
+
+      # 不需要夹具、不需要桌面会话的那部分测试；夹具是入库的小样本（tests/fixtures/ci）
+      - name: Self-test
+        shell: cmd
+        run: out\${{ matrix.arch }}\propsheet_model_test.exe --selftest
+
+      # 缩略图 smoke：5 个入库样本（PNG/WebP/自适应/deflate-arsc/无图标），预期 failed=1（f_noicon）
+      # 300 ms 是 architecture.md §2.1 的软上限；冷缓存下 P95 不应超过它
+      - name: Thumbnail smoke
+        shell: pwsh
+        run: |
+          $exe = "out/${{ matrix.arch }}/thumbtest.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          $lines = & $exe --dir tests/fixtures/ci --repeat 1 --json
+          $lines | ForEach-Object { $_ }
+          $rc = $LASTEXITCODE
+          "thumbtest exit code: $rc (2 = some fixtures failed, which is expected here)"
+          $summary = ($lines | Select-String '^summary').Line -replace '^summary', '' | ConvertFrom-Json
+          if ($summary.count -ne 5) { throw "expected 5 fixtures, got $($summary.count)" }
+          if ($summary.failed -ne 1) { throw "expected exactly 1 failure (f_noicon), got $($summary.failed)" }
+          if ($summary.coldP95 -gt 300) { throw "coldP95 $($summary.coldP95) ms exceeds the 300 ms budget" }
+          # thumbtest 对"预期失败"的样本返回 2，而 GitHub 的 pwsh 外壳会在末尾 exit $LASTEXITCODE：
+          # 不显式归零的话，断言全过也会被判红。判据只有上面的断言。
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.arch }}
+          path: |
+            out/${{ matrix.arch }}/apkthumb.dll
+            out/${{ matrix.arch }}/apkprop.dll
+            out/${{ matrix.arch }}/apkinfo.exe
+          if-no-files-found: error
+
+  package:
+    name: package
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin-x64
+          path: out/x64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin-arm64
+          path: out/arm64
+
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          if ($iscc) { "already installed: $($iscc.Source)"; exit 0 }
+          choco install innosetup --no-progress -y
+          "installed: $((Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source)"
+
+      - name: Package x64
+        shell: cmd
+        run: tools\pack.cmd x64
+
+      - name: Package arm64
+        shell: cmd
+        run: tools\pack.cmd arm64
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem out/dist/apk-shell-ext-setup-*.exe | Sort-Object Name
+          if ($files.Count -ne 2) { throw "expected 2 installers, got $($files.Count)" }
+          $files | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers
+          path: |
+            out/dist/apk-shell-ext-setup-*.exe
+            SHA256SUMS.txt
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: installers
+          path: dist
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $files = (Get-ChildItem dist -File | ForEach-Object { $_.FullName })
+          gh release create $tag @files --title $tag --generate-notes

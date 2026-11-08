@@ -23,11 +23,12 @@
 
 ## 安装
 
-1. 到 [Releases](https://github.com/mwtjc/apk-shell-ext/releases) 下载 `apk-shell-ext-setup-x.y.z.exe`；
+1. 到 [Releases](https://github.com/mwtjc/apk-shell-ext/releases) 下载与你机器架构一致的安装包：
+   `apk-shell-ext-setup-x.y.z-x64.exe`（Intel/AMD）或 `…-arm64.exe`（骁龙 X 等 Arm64 机器）；
 2. 双击安装。**默认只给当前用户装，不弹 UAC**；想装给整台机器就在第一页勾"为所有用户安装"（那一步会要一次管理员权限）；
 3. 装完不用重启。若资源管理器还显示旧图标，重启一次资源管理器即可。
 
-要求：Windows 10 1809+ / Windows 11，64 位。
+要求：Windows 10 1809+ / Windows 11，64 位（x64 与 Arm64 各有一个安装包，装错的那个会被安装器拒绝）。
 
 ## 用起来
 

@@ -1,6 +1,7 @@
 # build output
 out/
 build/
+build-arm64/
 *.obj
 *.pdb
 *.ilk

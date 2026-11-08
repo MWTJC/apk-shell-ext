@@ -14,7 +14,14 @@ if(NOT MSVC)
   message(FATAL_ERROR "This project targets MSVC only (see ADR-0004).")
 endif()
 
-set(APKSX_OUT_DIR "${CMAKE_SOURCE_DIR}/out/x64")
+# 目标架构：x64 或 arm64（见 ADR-0010）。交叉编译在 x64 宿主上经 vcvarsall x64_arm64 完成；
+# 产物一律落 out\<arch>，两种架构的二进制不共用目录。
+set(APKSX_ARCH "x64" CACHE STRING "target architecture: x64 | arm64")
+set_property(CACHE APKSX_ARCH PROPERTY STRINGS x64 arm64)
+if(NOT APKSX_ARCH MATCHES "^(x64|arm64)$")
+  message(FATAL_ERROR "APKSX_ARCH must be x64 or arm64 (got '${APKSX_ARCH}')")
+endif()
+set(APKSX_OUT_DIR "${CMAKE_SOURCE_DIR}/out/${APKSX_ARCH}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${APKSX_OUT_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${APKSX_OUT_DIR}")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${APKSX_OUT_DIR}")

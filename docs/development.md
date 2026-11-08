@@ -27,8 +27,13 @@ apk-shell-ext/
 
 ```bat
 tools\build.cmd Release        :: 产物在 out\x64\{apkthumb.dll, apkprop.dll, apkinfo.exe, ...}
-tools\build.cmd Debug --clean  :: 清掉 build\ 重来
+tools\build.cmd Release arm64   :: 交叉编译出 Arm64 产物到 out\arm64（ADR-0010）
+tools\build.cmd Debug --clean  :: 清掉 build\ 重来（arm64 清的是 build-arm64\）
 ```
+
+- 架构选择走 CMake 的 `-DAPKSX_ARCH=x64|arm64`（默认 x64），构建目录也随之分开（`build` / `build-arm64`）。
+- Arm64 交叉编译需要 VS 装 **"MSVC v143+ - C++ ARM64 build tools"**；脚本用 `vcvarsall x64_arm64`，
+  缺组件时 vcvarsall 会直接失败并提示。**源码里没有架构分支**——同一份代码编两个架构。
 
 - 依赖：Visual Studio 的 C++ 工具链（MSVC v143 或更新）、CMake ≥ 3.27、Ninja。
 - **工具链是自动找的**：先看 `%APKSX_VCVARS%`，再用 `vswhere` 找任意一个带 C++ 工作负载的 Visual Studio，
@@ -42,8 +47,9 @@ tools\build.cmd Debug --clean  :: 清掉 build\ 重来
 （`APKSX_VERSION_STRING` / `APKSX_VERSION_FULL` 必须与它自洽，脚本会校验）。
 
 ```bat
-tools\pack.cmd                 :: 先同步版本号到 .iss，再 ISCC → out\dist\apk-shell-ext-setup-<ver>.exe
-tools\pack.cmd --build         :: 先 build.cmd Release 再打包
+tools\pack.cmd                 :: 先同步版本号到 .iss，再 ISCC → out\dist\apk-shell-ext-setup-<ver>-x64.exe
+tools\pack.cmd arm64           :: 同上，Arm64 包 → out\dist\apk-shell-ext-setup-<ver>-arm64.exe
+tools\pack.cmd arm64 --build   :: 先 build.cmd Release arm64 再打包
 ```
 
 - `tools\sync-version.ps1` 把 `src/version.h` 的版本写进 `installer\apk-shell-ext.iss` 的 `#define AppVersion`；
@@ -86,7 +92,7 @@ out\x64\thumbtest.exe --shell --file <pkg>                                      
 
 ```bat
 powershell -File tools\verify-install.ps1 -Phase snapshot -Path a.txt
-out\dist\apk-shell-ext-setup-<ver>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+out\dist\apk-shell-ext-setup-<ver>-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 powershell -File tools\verify-install.ps1 -Phase check -State installed
 "%LOCALAPPDATA%\Programs\apk-shell-ext\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
 powershell -File tools\verify-install.ps1 -Phase check -State removed
@@ -148,7 +154,7 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
 当前状态一句话：**M0–M5 收口并已公开发布**——仓库 https://github.com/MWTJC/apk-shell-ext
 （public，`main`），首个 release `v1.0.0` 的安装包已上传；可装可用、装/卸零残留已验证，剩下的都是"锦上添花 + 补测"。
 
-- **构建**：`tools\build.cmd Release`（MSVC 自动发现，见 §2）→ `out\x64\`。
+- **构建**：`tools\build.cmd Release`（MSVC 自动发现，见 §2）→ `out\x64\`；`tools\build.cmd Release arm64` → `out\arm64\`。
 - **打包**：`tools\pack.cmd`（会先跑 `sync-version.ps1`，再找 ISCC）→ `out\dist\`。
 - **版本号**：只改 `src/version.h`；`sync-version.ps1 -Check` 能一眼看出包版本有没有漂。
 - **夹具**：`tests\gen_*.py` 可随时重造（不入库）；真实样本在 `tests\fixtures\real\`（gitignore），
@@ -180,7 +186,8 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
   **改这块先读 ADR-0009**：新增的 `.old` 文件是预期产物（卸载/下次安装清），别当成残留。
   注意安装包里的 `docs/install.md` 是**打包时**的快照，改完文档要重新 `pack.cmd` 才会进安装包。
   1.0.1 已发布（tag `v1.0.1` + release）；1.0.2 已在本机整机安装并复核（`verify-install check installed`），
-  产物 `out\dist\apk-shell-ext-setup-1.0.2.exe`，**尚未打 tag / 发版**。
+  产物 `out\dist\apk-shell-ext-setup-1.0.2-{x64,arm64}.exe`（按架构分包，见 [ADR-0010](adr/0010-arch-specific-builds-and-installers.md)），
+  **尚未打 tag / 发版**；Arm64 包目前的验证程度是"能编出来 + 在本机 x64 上被架构守卫拒绝"，**运行期未验收**。
 
 ## 10. 变更纪律
 
@@ -189,4 +196,42 @@ M5 R-0014），收口后还有两轮改动：**图标 v2（R-0015）**、**功�
 3. 每阶段结束在 [verification.md](verification.md) 追加一条记录（含命令与结论），未验证项单列，不许含糊。
 4. 安装/卸载行为属于交付契约：改了必须同步 [install.md](install.md)（它会随安装包发给用户）
    与 `verify-install.ps1`。
-5. 发布流程见 [release.md](release.md)。
+5. 发布流程见 [release.md](release.md)（CI 接管后见 §11）。
+
+## 11. CI 与本地自检（act）
+
+CI 形态见 [ADR-0011](adr/0011-ci-on-windows-runners.md)，工作流是 `.github\workflows\build.yml`：
+
+| job | 跑在哪 | 做什么 |
+| --- | --- | --- |
+| `build` | `windows-latest`（x64）+ `windows-11-arm`（arm64） | 版本号漂移闸门 → `tools\build.cmd Release <arch>` → PE 机器码断言（`0x8664` / `0xAA64`）→ `propsheet_model_test --selftest` → `thumbtest` 跑入库样本 `tests/fixtures/ci`（断言 count=5 / failed=1 / coldP95 ≤ 300 ms）→ 上传三个二进制 |
+| `package` | `windows-latest` | 下载两个架构的产物到 `out\x64` / `out\arm64` → `pack.cmd x64` / `pack.cmd arm64` → `SHA256SUMS.txt` |
+| `release` | `windows-latest`，仅 `v*` tag | `gh release create` 两个安装包 + 校验和 |
+
+触发只有两种：Actions 页面手动 `workflow_dispatch`，或 `git push` 一个 `v*` tag。**没有 PR 门禁。**
+
+**本地自检（nektos/act）**：act 只能跑 Linux 容器；Windows 腿要用 `-self-hosted` 落到本机（不经过 Docker）：
+
+```bat
+act -l                                                        :: 看 job 图
+act -n workflow_dispatch                                      :: 只校验 YAML/表达式（Windows 腿会报"unsupported platform"，正常）
+act workflow_dispatch -j build -P windows-latest=-self-hosted ^
+    -P windows-11-arm=-self-hosted --matrix arch:x64          :: 真编译 + 真断言
+```
+
+实测（2026-11-08，act 0.2.97）：`-self-hosted` 下 build 腿能完整跑通（版本闸门 → 编译 →  三个 PE 断言 → selftest 全绿）。
+
+**已知限制（踩过）**：
+
+- `actions/upload-artifact@v4` 在 act 里会失败：`Unable to get the ACTIONS_RUNTIME_TOKEN env variable` —— artifact 服务是 GitHub 侧的，act 模拟不了。
+  所以本地只能验到"编译 + 断言"，`package` / `release` 两段必须在 GitHub 上首跑。
+- act 首次要 clone `actions/*`，国内网络需给 act 传代理：`HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7897`
+  （clone 缓存在 `%USERPROFILE%\.cache\act`）。
+- `--matrix arch:x64|arm64` 只跑一条腿；不带时两条腿都会在映射到的同一台机器上跑（arm64 腿会走本机交叉编译，能验逻辑但验不了"原生 Arm64 runner"）。
+- 跑 act 前先删掉 `build\` / `build-arm64\`：`CMakeCache.txt` 里存的是绝对路径，act 会把工作区复制到
+  `%USERPROFILE%\.cache\act\<hash>\hostexecutor\`，旧缓存与新路径不一致会直接报
+  "The source ... does not match the source ... used to generate cache"（踩过）。
+- arm64 腿里的 `Self-test` 在 x64 主机上必然失败（x64 跑不了 `AA64` 的 exe）；这一步的本地意义只有"编译 + 断言"，真正的 selftest 要在 `windows-11-arm` 上跑。
+- `thumbtest` 对**预期失败**的样本（如 `f_noicon.apk`）返回 **2**，而 GitHub 的 `shell: pwsh` 外壳会在末尾
+  `exit $LASTEXITCODE` —— 断言全过也会被判红。`Thumbnail smoke` 步骤因此以显式 `exit 0` 收尾，判据只留断言（踩过）。
+- **CI 绿 ≠ 验收绿**：ProcMon 零读取、300 ms 预算、装/卸零残留、Arm64 运行期行为仍按 [verification.md](verification.md) 人肉验。
