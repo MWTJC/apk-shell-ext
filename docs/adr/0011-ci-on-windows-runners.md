@@ -81,6 +81,26 @@
 理由：runner 上装 Android SDK 只为跑 5 个包不划算，而 aapt2 仍是"造样本"的必要工具、不是"跑样本"的必要工具。
 
 `build` job 因此多一步 `Thumbnail smoke`，断言写死为
-`count == 5 && failed == 1（f_noicon，预期）&& coldP95 ≤ 300 ms`（300 是 architecture.md §2.1 的软上限）。
+`count == 5 && failed ∈ {1,2} && hotP95 ≤ 300 ms && coldMax ≤ 1500 ms`（300 是 architecture.md §2.1 的软上限）。
 本机实测冷缓存 `count=5 failed=1 coldP95=126 ms`（其中 ~126 ms 是 WebP 编解码器首次初始化）。
 改这个目录等于改 CI 基线，`tests/fixtures/ci/README.md` 里写明了同步规则。
+
+### 2026-11-08 · 首跑：两条托管镜像对 WebP 的支持不一致
+
+首个真实 CI run（`workflow_dispatch`，#42482442617）两条腿都在 `Thumbnail smoke` 上红，但原因是环境差异，不是回归：
+
+| 腿 | 结果 | 结论 |
+| --- | --- | --- |
+| `windows-11-arm` | 编译 ✅、PE 断言 `0xAA64` ✅、selftest ✅、`f_webp` **解出但冷路径 798 ms** | Arm64 镜像**带** WebP 编解码器；首次解码把 `coldP95` 顶到 798 ms |
+| `windows-latest` | 编译 ✅、PE 断言 `0x8664` ✅、selftest ✅、`f_webp` **解码失败**（56 ms 即返），`failed=2` | x64 镜像**没有** WebP 编解码器 |
+
+因此断言改成按"结构 + 热路径预算"判，而不是按冷路径绝对时间：
+
+- `count == 5`；
+- `failed ∈ {1,2}`：`f_noicon` 必失败；`f_webp` 只在镜像缺编解码器时失败（步骤会打印是哪一种）；
+- `hotP95 ≤ 300 ms`（`--repeat 2` 的第二次，即"每个缩略图"的真实预算）；
+- `coldMax ≤ 1500 ms`（只用来兜住病态回归；冷路径里编解码器初始化是另一笔账）。
+
+**产品侧结论（待跟进，不在本 ADR 决策范围）**：包里图标若是 WebP 而目标机没装 WebP 图像扩展，
+该包没有缩略图（优雅退回默认图标，不崩）。这与 architecture.md §6 的降级策略一致，但需要在用户手册里说清楚；
+是否要预热 WIC 编解码器或改用别的解码路径，另开评估（预热会让 explorer 加载变慢，不划算的风险很高）。

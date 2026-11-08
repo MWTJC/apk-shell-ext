@@ -130,6 +130,11 @@ powershell -ExecutionPolicy Bypass -File tools\register.ps1 -Uninstall
 2. `apkinfo.exe --status` 看 `thumb=` 是否"用户/整机"；
 3. 重启资源管理器；还不行就 `--clear-cache` 再重启。
 
+**少数包明明有图标，却显示默认图标？**
+最常见的原因是包内图标是 **WebP**，而这台机器没装 WebP 图像编解码器（Win11 的"Webp 图像扩展"，
+Microsoft Store 里可装）。缩略图解码走系统 WIC：没有对应编解码器时该包不出图，退回默认图标，
+不影响属性页与其它包。`apkinfo.exe --diag on` 后看日志里的解码错误可以确认。
+
 **小图标分不清 APK / 分包 / HAP？**
 三枚图标是同一套样式（一张带折角的纸 + 一条写着字的绿/红色带）：
 `.apk` 绿单页（写 APK）、`.xapk/.apks/.apkm` 绿双页（写 XAPK）、`.hap` 红单页（写 HAP）。

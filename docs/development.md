@@ -234,4 +234,7 @@ act workflow_dispatch -j build -P windows-latest=-self-hosted ^
 - arm64 腿里的 `Self-test` 在 x64 主机上必然失败（x64 跑不了 `AA64` 的 exe）；这一步的本地意义只有"编译 + 断言"，真正的 selftest 要在 `windows-11-arm` 上跑。
 - `thumbtest` 对**预期失败**的样本（如 `f_noicon.apk`）返回 **2**，而 GitHub 的 `shell: pwsh` 外壳会在末尾
   `exit $LASTEXITCODE` —— 断言全过也会被判红。`Thumbnail smoke` 步骤因此以显式 `exit 0` 收尾，判据只留断言（踩过）。
+- 托管镜像的 WebP 支持不一致（`[实测]` #42482442617）：`windows-latest` 没有 WIC WebP 编解码器
+  （`f_webp` 56 ms 即判失败），`windows-11-arm` 有但冷启动 798 ms。所以 smoke 断言按"结构 + 热路径预算"判，
+  冷路径只用 1500 ms 兜底 —— 别再把 `coldP95 ≤ 300` 写回去。
 - **CI 绿 ≠ 验收绿**：ProcMon 零读取、300 ms 预算、装/卸零残留、Arm64 运行期行为仍按 [verification.md](verification.md) 人肉验。
