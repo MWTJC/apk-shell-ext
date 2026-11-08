@@ -184,5 +184,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = '${{ github.ref_name }}'
-          $files = (Get-ChildItem dist -File | ForEach-Object { $_.FullName })
+          # 用正斜杠的相对路径：gh 在 Windows 上会把这些参数当 glob 展开，
+          # 反斜杠路径会报 "no matches found for `D`"（踩过，v1.0.3 首跑）。
+          $files = Get-ChildItem dist -File | ForEach-Object { "dist/$($_.Name)" }
+          $files | ForEach-Object { $_ }
           gh release create $tag @files --title $tag --generate-notes
