@@ -210,6 +210,9 @@ CI 形态见 [ADR-0011](adr/0011-ci-on-windows-runners.md)，工作流是 `.gith
 
 触发只有两种：Actions 页面手动 `workflow_dispatch`，或 `git push` 一个 `v*` tag。**没有 PR 门禁。**
 
+当前状态（2026-11-08）：`#42483326344` 全绿——两条腿编译 + PE 断言 + selftest + thumbnail smoke 通过，
+`package` 出两个安装包与 `SHA256SUMS.txt`。数字与未验项见 [verification.md R-0021](verification.md)。
+
 **本地自检（nektos/act）**：act 只能跑 Linux 容器；Windows 腿要用 `-self-hosted` 落到本机（不经过 Docker）：
 
 ```bat

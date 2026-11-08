@@ -104,3 +104,15 @@
 **产品侧结论（待跟进，不在本 ADR 决策范围）**：包里图标若是 WebP 而目标机没装 WebP 图像扩展，
 该包没有缩略图（优雅退回默认图标，不崩）。这与 architecture.md §6 的降级策略一致，但需要在用户手册里说清楚；
 是否要预热 WIC 编解码器或改用别的解码路径，另开评估（预热会让 explorer 加载变慢，不划算的风险很高）。
+
+### 2026-11-08 · 全绿与两处收尾
+
+- `#42482891689` / `#42483326344` 两次 `workflow_dispatch` 全绿：两条腿编译 ✅、PE 断言 ✅（`0x8664` / `0xAA64`）、
+  selftest ✅（Arm64 为原生执行）、`Thumbnail smoke` ✅、`package` ✅ 出两个安装包 + `SHA256SUMS.txt`。
+  证据与数字见 [verification.md R-0021](../verification.md)。
+- `actions/*` 从 v4 升到 `checkout@v7` / `upload-artifact@v7` / `download-artifact@v8`：v4 已被强制跑在 Node 24 上
+  并持续刷弃用警告，升级后注解清空（首跑时的 `ANNOTATIONS` 区块消失）。
+- `SHA256SUMS.txt` 改成显式写 **LF**：原来 `Set-Content` 写 CRLF，Linux/macOS 上 `sha256sum -c` 会因 `\r` 解析失败；
+  现在下载后 `sha256sum -c` 两个包都 `OK`。
+- **仍未做**：Arm64 上的壳集成验收（属性页 UI、真实 Explorer 缩略图管线、ProcMon 零读取）——runner 无交互桌面，
+  必须真机；`windows-11-arm` 的 public preview 属性也意味着这条腿随时可能排队变长或镜像变动。

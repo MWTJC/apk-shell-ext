@@ -1713,3 +1713,36 @@ Inno 源码（`issrc` 浅克隆，`Projects/Src/`）：
 3. 完成页那句"Files that Explorer had loaded were replaced in place…"只验证了逻辑与编译，**没截图**；
    它只在真的发生改名时出现（本轮 E2E 是静默安装，看不到）。
 4. 本条只在按用户安装（临时目录）上跑过端到端；整机安装用的是同一条代码路径，但只做了"装完复核"。
+
+## 29. R-0021 记录（双架构交付 + CI 首发，2026-11-08）
+
+### 环境
+
+| 项 | 值 |
+| --- | --- |
+| CI | GitHub Actions，`windows-latest`（x64）+ `windows-11-arm`（原生 Arm64），VS 18.11.12328.437 |
+| 跑次 | `#42483326344`（全绿，最终判据）、`#42482891689`（全绿，首绿）、`#42482442617`（首跑，红→已修，见 [ADR-0011](adr/0011-ci-on-windows-runners.md) 修订段） |
+| 本机 | Windows 11 x64 + VS 18（MSVC 14.51），交叉编译 Arm64 走 `vcvarsall x64_arm64` |
+
+### 结论
+
+| 判据 | 实测 |
+| --- | --- |
+| 两条腿都编出正确机器码 | `windows-latest`：`apkthumb/apkprop/apkinfo` = `0x8664`；`windows-11-arm`（`PROCESSOR_ARCHITECTURE=ARM64`）：三者 = `0xAA64` |
+| 模型自测 | 两条腿 `propsheet_model_test --selftest` 全绿（Arm64 上是**原生执行**） |
+| 缩略图（x64 runner） | `count=5 failed=2`（`f_noicon` + `f_webp`，后者因镜像无 WIC WebP 编解码器），`coldP95=13.95 ms`，`hotP95=0.94 ms` |
+| 缩略图（Arm64 runner） | `count=5 failed=1`，`coldP50=14.23 / coldP95=891.83 ms`（WebP 编解码器首次初始化），`hotP95=1.17 ms` |
+| 缩略图（本机 x64，有编解码器） | `count=5 failed=1`，`coldP95=126 ms`，`hotP95≈0.9 ms` |
+| 打包 | `package` job 产出 `apk-shell-ext-setup-1.0.2-{x64,arm64}.exe` + `SHA256SUMS.txt`；下载后用 `sha256sum -c` 校验两个包全 `OK`（arm64 `9d7748b6…`、x64 `b677f1dc…`） |
+| 架构守卫 | arm64 包在 x64 机器上 `exit 1`；`C:\Program Files\apk-shell-ext` 9 个文件 md5 前后一致 |
+
+### 未验证 / 注意
+
+1. **壳集成本身没有在 Arm64 上验过**：CI runner 没有交互桌面，`IShellPropSheetExt` 属性页、
+   `IThumbnailProvider` 经真实 Explorer/dllhost 管线（`thumbtest --shell`）、ProcMon 零读取这些仍需 Arm64 真机。
+   本次证明的是"Arm64 二进制能编、能跑、能解码、解析与布局自测全绿"，不等于"在 Arm64 资源管理器里可见"。
+2. **WebP 冷启动 891 ms（Arm64 runner）** 与 126 ms（本机 x64）差 7 倍：是编解码器首次初始化 + runner 冷镜像的组合，
+   真机上的数字待测。CI 因此只断言 `hotP95 ≤ 300 ms`，冷路径用 1500 ms 兜底（[ADR-0011](adr/0011-ci-on-windows-runners.md)）。
+3. `windows-latest` 没有 WIC WebP 编解码器 → **装了 WebP 图像扩展之前**，图标是 WebP 的包没有缩略图（优雅退回默认图标）；
+   已在 `docs/install.md` FAQ 里写明。
+4. `windows-11-arm` 仍是 public preview（仅 public 仓），镜像内容与可用性会变；`Toolchain inventory` 步骤负责留证据。
