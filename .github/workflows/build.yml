@@ -159,12 +159,20 @@ jobs:
           [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", $text + "`n", [Text.UTF8Encoding]::new($false))
           Get-Content SHA256SUMS.txt
 
+      # 摊平到一个 staging 目录再上传：upload-artifact 会保留相对路径，
+      # 直接传 out/dist/* 会在下载侧变成 dist/out/dist/*（release 时又在 Windows 的路径处理上翻车）。
+      - name: Stage release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item out/dist/apk-shell-ext-setup-*.exe release/
+          Copy-Item SHA256SUMS.txt release/
+          Get-ChildItem release -File | ForEach-Object { "{0}  {1} bytes" -f $_.Name, $_.Length }
+
       - uses: actions/upload-artifact@v7
         with:
           name: installers
-          path: |
-            out/dist/apk-shell-ext-setup-*.exe
-            SHA256SUMS.txt
+          path: release/*
           if-no-files-found: error
 
   release:
@@ -176,16 +184,15 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: installers
-          path: dist
+          path: release
 
-      - name: Create GitHub release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = '${{ github.ref_name }}'
-          # 用正斜杠的相对路径：gh 在 Windows 上会把这些参数当 glob 展开，
-          # 反斜杠路径会报 "no matches found for `D`"（踩过，v1.0.3 首跑）。
-          $files = Get-ChildItem dist -File | ForEach-Object { "dist/$($_.Name)" }
-          $files | ForEach-Object { $_ }
-          gh release create $tag @files --title $tag --generate-notes
+      # 不用 gh CLI 建 release：它在 Windows 上会把文件参数当 glob 展开
+      # （v1.0.3 首跑两次都栽在 "no matches found for `d`"）。改成这个社区标准 action。
+      - uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release/*.exe
+            release/SHA256SUMS.txt
+          fail_on_unmatched_files: true
